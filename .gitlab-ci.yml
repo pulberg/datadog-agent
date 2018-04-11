@@ -54,7 +54,15 @@ before_script:
 #
 # source_test
 #
-
+run_test_cmd:
++  stage: run_test_cmd
++  image: 486234852809.dkr.ecr.us-east-1.amazonaws.com/ci/datadog-agent-builders/deb_x64:latest
++  tags: [ "runner:main", "size:large" ]
++  script:
++    - aws configure set preview.cloudfront true
++    - aws cloudfront list-invalidations --distribution-id E18ZGDURBK5K6X
++  #  - aws cloudfront create-invalidation --distribution-id E18ZGDURBK5K6X /*stable*
++  #  - aws cloudfront create-invalidation --distribution-id E17ZLUWTA3BBMD /*stable*
 
 # run tests for deb-x64
 run_tests_deb-x64:
