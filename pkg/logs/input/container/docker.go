@@ -83,7 +83,7 @@ func (dt *DockerTailer) Stop() {
 // tailFromBeginning starts the tailing from the beginning
 // of the container logs
 func (dt *DockerTailer) tailFromBeginning() error {
-	return dt.tailFrom(time.Time{}.Format(config.DateFormat))
+	return dt.tailFrom("")
 }
 
 // tailFromEnd starts the tailing from the last line
