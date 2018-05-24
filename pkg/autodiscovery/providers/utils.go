@@ -109,11 +109,11 @@ func extractTemplatesFromMap(key string, input map[string]string, prefix string)
 	}
 	configs = append(configs, checksConfigs...)
 
-	logsConfigs, err := extractLogsTemplateFromMap(key, input, prefix)
-	if err != nil {
+	logsConfig, err := extractLogsTemplateFromMap(key, input, prefix)
+	if err != nil || logsConfig == nil {
 		return configs, err
 	}
-	configs = append(configs, logsConfigs...)
+	configs = append(configs, *logsConfig)
 
 	return configs, nil
 }
@@ -151,14 +151,14 @@ func extractCheckTemplatesFromMap(key string, input map[string]string, prefix st
 }
 
 // extractLogsTemplatesFromMap returns the first logs configuration from a given map.
-func extractLogsTemplatesFromMap(key string, input map[string]string, prefix string) ([]integration.Config, error) {
+func extractLogsTemplateFromMap(key string, input map[string]string, prefix string) (*integration.Config, error) {
 	value, found := input[prefix+logsConfigPath]
 	if !found {
-		return []integration.Config{}, nil
+		return nil, nil
 	}
 	logsConfigs, err := parseJSONValue(value)
 	if err != nil || len(logsConfigs) < 1 {
-		return []integration.Config{}, fmt.Errorf("in %s: %s", logsConfigPath, err)
+		return nil, fmt.Errorf("in %s: %s", logsConfigPath, err)
 	}
-	return []integration.Config{{LogsConfig: logsConfigs[0], ADIdentifiers: []string{key}}}, nil
+	return &integration.Config{LogsConfig: logsConfigs[0], ADIdentifiers: []string{key}}, nil
 }
