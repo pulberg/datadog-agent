@@ -96,14 +96,17 @@ func (l *UDSListener) Listen() {
 			oob := l.oobPool.Get().([]byte)
 			var oobn int
 			n, oobn, _, _, err = l.conn.ReadMsgUnix(packet.buffer, oob)
-
-			// Extract container id from credentials
-			container, err := processUDSOrigin(oob[:oobn])
 			if err != nil {
-				log.Warnf("dogstatsd-uds: error processing origin, data will not be tagged : %v", err)
-				socketExpvar.Add("OriginDetectionErrors", 1)
+				log.Warnf("dogstatsd-uds: read error on the connection, data will not be tagged : %v", err)
 			} else {
-				packet.Origin = container
+				// Extract container id from credentials
+				container, err := processUDSOrigin(oob[:oobn])
+				if err != nil {
+					log.Warnf("dogstatsd-uds: error processing origin, data will not be tagged : %v", err)
+					socketExpvar.Add("OriginDetectionErrors", 1)
+				} else {
+					packet.Origin = container
+				}
 			}
 			// Return the buffer back to the pool for reuse
 			l.oobPool.Put(oob)
