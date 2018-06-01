@@ -9,7 +9,6 @@
 package app
 
 import (
-	"os/user"
 	"path/filepath"
 )
 
