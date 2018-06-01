@@ -117,7 +117,7 @@ func getTUFConfigFilePath() (string, error) {
 
 func getTUFPipCachePath() (string, error) {
 	here, _ := executable.Folder()
-	cPath := filepath.Join(here, relTufConfigFilePath)
+	cPath := filepath.Join(here, relTufPipCache)
 
 	if _, err := os.Stat(cPath); err != nil {
 		if os.IsNotExist(err) {
