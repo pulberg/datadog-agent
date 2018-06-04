@@ -34,11 +34,9 @@ if opts[:raw_cloudfront_path].nil?
   Aws.config.update(region: 'us-east-1')
   s3 = Aws::S3::Resource.new
 
-  puts "Found the following objects to invalidate:"
-
   s3.bucket(repo.s3_bucket).objects.each do |obj|
     if opts[:invalidate_versioned] || obj.key.split('/').last !~ /[0-9]/
-      puts obj.key
+      objects.push('/' + obj.key)
     end
   end
 
