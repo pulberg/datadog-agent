@@ -73,7 +73,7 @@ build do
       file = File.read(windows_safe_path("#{project_dir}/.public-tuf-config.json"))
       tuf_config = JSON.parse(file)
       tuf_config['repositories_dir'] = 'c:\\ProgramData\\Datadog\\repositories'
-      erb source: "public_tuf_config.json.erb",
+      erb source: "public-tuf-config.json.erb",
           dest: "#{install_dir}/public-tuf-config.json",
           mode: 0640,
           vars: { tuf_config: tuf_config }
