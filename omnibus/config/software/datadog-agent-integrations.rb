@@ -18,6 +18,7 @@ end
 
 relative_path 'integrations-core'
 whitelist_file "embedded/lib/python2.7"
+tuf_repo_path = "#{install_dir}/repositories/public-integrations-core/metadata/"
 
 source git: 'https://github.com/DataDog/integrations-core.git'
 
@@ -57,11 +58,15 @@ build do
 
     # Add TUF metadata
     if windows?
+      mkdir "#{windows_safe_path(tuf_repo_path)}\\current"
+      mkdir "#{windows_safe_path(tuf_repo_path)}\\previous"
       copy "#{windows_safe_path(project_dir)}\\.public-tuf-config.json", "#{windows_safe_path(install_dir)}\\public-tuf-config.json"
-      copy "#{windows_safe_path(project_dir)}\\.tuf-root.json", "#{windows_safe_path(install_dir)}\\root.json"
+      copy "#{windows_safe_path(project_dir)}\\.tuf-root.json", "#{windows_safe_path(tuf_repo_path)}\\current\\root.json"
     else
+      mkdir "#{windows_safe_path(tuf_repo_path)}/current"
+      mkdir "#{windows_safe_path(tuf_repo_path)}/previous"
       copy "#{project_dir}/.public-tuf-config.json", "#{install_dir}/public-tuf-config.json"
-      copy "#{project_dir}/.tuf-root.json", "#{install_dir}/root.json"
+      copy "#{project_dir}/.tuf-root.json", "#{windows_safe_path(tuf_repo_path)}/current/root.json"
     end
     # File.chmod(0644, "#{install_dir}/public-tuf-config.json")
 
