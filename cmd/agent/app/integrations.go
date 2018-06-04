@@ -41,7 +41,7 @@ func init() {
 	tufCmd.PersistentFlags().BoolVarP(&withTuf, "tuf", "t", true, "use TUF repo")
 	tufCmd.PersistentFlags().BoolVarP(&nativePkg, "pip-package", "p", false, "providing native pip package name")
 	tufCmd.PersistentFlags().BoolVarP(&allowRoot, "allow-root", "r", false, "flag to enable root to install packages")
-	tufCmd.PersistentFlags().StringVarP(&tufConfig, "tuf-cfg", "c", getTufConfigPath(), "use TUF repo")
+	tufCmd.PersistentFlags().StringVar(&tufConfig, "tuf-cfg", getTufConfigPath(), "use TUF repo")
 	tufCmd.PersistentFlags().StringSlice("cmd-flags", []string{}, "command flags to pass onto pip (comma-separated or multiple flags)")
 	tufCmd.PersistentFlags().StringSlice("idx-flags", []string{}, "index flags to pass onto pip (comma-separated or multiple flags)")
 
