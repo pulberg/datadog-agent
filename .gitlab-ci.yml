@@ -1,4 +1,5 @@
 stages:
+  - run_test_cmd
   - source_test
   - binary_build
   - integration_test
@@ -56,11 +57,11 @@ before_script:
 #
 run_test_cmd:
   stage: run_test_cmd
-  image: 486234852809.dkr.ecr.us-east-1.amazonaws.com/ci/datadog-agent-builders/deploy:latest
+  image: "486234852809.dkr.ecr.us-east-1.amazonaws.com/ci/datadog-agent-builders/deploy:latest"
   tags: [ "runner:main", "size:large" ]
   script:
-    - REPO=apt ENV=staging PATTERN_SUBSTRING=/nightly/ ./invalidate.sh
-    - REPO=yum ENV=staging PATTERN_SUBSTRING=/nightly/ ./invalidate.sh
+    - "REPO=apt ENV=staging PATTERN_SUBSTRING=/nightly/ ./invalidate.sh"
+    - "REPO=yum ENV=staging PATTERN_SUBSTRING=/nightly/ ./invalidate.sh"
 
 # run tests for deb-x64
 run_tests_deb-x64:
