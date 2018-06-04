@@ -61,8 +61,8 @@ run_test_cmd:
   tags: [ "runner:main", "size:large" ]
   script:
     - cd tasks/cloudfront
-    - "REPO=apt PATTERN_SUBSTRING=/nightly/6 ./invalidate-staging.sh"
-    - "REPO=yum PATTERN_SUBSTRING=/nightly/6 ./invalidate-staging.sh"
+    - "REPO=apt PATTERN_SUBSTRING=/$DEB_RPM_BUCKET_BRANCH/6/ ./invalidate-staging.sh"
+    - "REPO=yum PATTERN_SUBSTRING=/$DEB_RPM_BUCKET_BRANCH/6/ ./invalidate-staging.sh"
 
 # run tests for deb-x64
 run_tests_deb-x64:
