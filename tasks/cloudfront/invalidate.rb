@@ -5,7 +5,6 @@ require 'trollop'
 
 opts = Trollop::options do
   opt :repo_type, "Type of repo to invalidate ('apt' or 'yum')",  :type => :string, :default => nil
-  opt :env, "Environment of the repo ('staging' or 'prod')", :type => :string, :default => nil
   opt :pattern_regex, "Regex defining whitelist of objects to invalidate",  :type => :string, :default => ''
   opt :pattern_substring, "Substring defining whitelist of objects to invalidate (only objects matching the substring will be selected for invalidation)",  :type => :string, :default => ''
   opt :invalidate_versioned, "Don't filter out versioned objects from invalidation (versioned == with one or more digits in the filename)"
@@ -22,16 +21,11 @@ repos = {
     'apt' => Repo.new('apt.datad0g.com', 'E18ZGDURBK5K6X'),
     'yum' => Repo.new('yum.datad0g.com', 'E17ZLUWTA3BBMD')
   },
-  'prod' => {
-    'apt' => Repo.new('apt.datadoghq.com', 'E3Q5GQK7JXVKE'),
-    'yum' => Repo.new('yum.datadoghq.com', 'E1KM31Z2LAGIKZ')
-  }
 }
 
 Trollop::die :repo_type, "You must specify a repo-type of 'apt' or 'yum'" unless %w{apt yum}.include?(opts[:repo_type])
-Trollop::die :env, "You must specify an env of 'prod' or 'staging'" unless %w{prod staging}.include?(opts[:env])
 
-repo = repos[opts[:env]][opts[:repo_type]]
+repo = repos['staging'][opts[:repo_type]]
 
 objects = []
 
@@ -40,9 +34,12 @@ if opts[:raw_cloudfront_path].nil?
   Aws.config.update(region: 'us-east-1')
   s3 = Aws::S3::Resource.new
 
+  puts "Found the following objects to invalidate:"
+
   s3.bucket(repo.s3_bucket).objects.each do |obj|
     if opts[:invalidate_versioned] || obj.key.split('/').last !~ /[0-9]/
       objects.push('/' + obj.key)
+      puts obj.key
     end
   end
 
@@ -81,29 +78,16 @@ if opts[:dry_run]
 end
 
 # We assume that we're running from a staging `ott` node
-if opts[:env] == 'prod'
-  puts "Assuming prod role to invalidate prod CloudFront distributions"
-  role_credentials = Aws::AssumeRoleCredentials.new(
-    client: Aws::STS::Client.new(region: 'us-east-1'),
-    role_arn: "arn:aws:iam::727006795293:role/build-stable-cloudfront-invalidation",
-    role_session_name: "gitlab-cloudfront-invalidate-script"
-  )
-  cloudfront = Aws::CloudFront::Client.new(
-    region: 'us-east-1',
-    credentials: role_credentials
-  )
-else
-  puts "Assuming staging role to invalidate prod CloudFront distributions"
-  role_credentials = Aws::AssumeRoleCredentials.new(
-    client: Aws::STS::Client.new(region: 'us-east-1'),
-    role_arn: "arn:aws:iam::727006795293:role/build-stable-cloudfront-invalidation",
-    role_session_name: "gitlab-cloudfront-invalidate-script"
-  )
-  cloudfront = Aws::CloudFront::Client.new(
-    region: 'us-east-1',
-    credentials: role_credentials
-  )
-end
+puts "Assuming staging role to invalidate staging CloudFront distributions"
+role_credentials = Aws::AssumeRoleCredentials.new(
+  client: Aws::STS::Client.new(region: 'us-east-1'),
+  role_arn: "arn:aws:iam::727006795293:role/build-stable-cloudfront-invalidation",
+  role_session_name: "gitlab-cloudfront-invalidate-script"
+)
+cloudfront = Aws::CloudFront::Client.new(
+  region: 'us-east-1',
+  credentials: role_credentials
+)
 
 # Generate a caller_reference, which has to be unique for what this invalidation does.
 # It's a CloudFront mechanism to ensure that we don't accidentally trigger multiple
