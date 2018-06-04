@@ -38,7 +38,6 @@ if opts[:raw_cloudfront_path].nil?
 
   s3.bucket(repo.s3_bucket).objects.each do |obj|
     if opts[:invalidate_versioned] || obj.key.split('/').last !~ /[0-9]/
-      objects.push('/' + obj.key)
       puts obj.key
     end
   end
