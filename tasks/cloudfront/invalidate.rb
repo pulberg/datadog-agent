@@ -93,8 +93,15 @@ if opts[:env] == 'prod'
     credentials: role_credentials
   )
 else
+  puts "Assuming staging role to invalidate prod CloudFront distributions"
+  role_credentials = Aws::AssumeRoleCredentials.new(
+    client: Aws::STS::Client.new(region: 'us-east-1'),
+    role_arn: "arn:aws:iam::727006795293:role/build-stable-cloudfront-invalidation",
+    role_session_name: "gitlab-cloudfront-invalidate-script"
+  )
   cloudfront = Aws::CloudFront::Client.new(
-    region: 'us-east-1'
+    region: 'us-east-1',
+    credentials: role_credentials
   )
 end
 
