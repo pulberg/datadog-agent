@@ -32,5 +32,5 @@ fi
 gem install bundler
 bundle install
 echo "Starting invalidation of $REPO repo"
-bundle exec ./invalidate.rb --repo-type $REPO --env $ENV $OPTIONS
+bundle exec ./invalidate.rb --repo-type $REPO $OPTIONS
 cd $WORKSPACE
