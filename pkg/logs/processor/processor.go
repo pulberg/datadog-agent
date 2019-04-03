@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package processor
 
@@ -10,26 +10,27 @@ import (
 
 	"github.com/DataDog/datadog-agent/pkg/logs/config"
 	"github.com/DataDog/datadog-agent/pkg/logs/message"
+	"github.com/DataDog/datadog-agent/pkg/logs/metrics"
 )
 
 // A Processor updates messages from an inputChan and pushes
 // in an outputChan.
 type Processor struct {
-	inputChan  chan message.Message
-	outputChan chan message.Message
-	encoder    Encoder
-	prefixer   Prefixer
-	done       chan struct{}
+	inputChan       chan *message.Message
+	outputChan      chan *message.Message
+	processingRules []*config.ProcessingRule
+	encoder         Encoder
+	done            chan struct{}
 }
 
 // New returns an initialized Processor.
-func New(inputChan, outputChan chan message.Message, encoder Encoder, prefixer Prefixer) *Processor {
+func New(inputChan, outputChan chan *message.Message, processingRules []*config.ProcessingRule, encoder Encoder) *Processor {
 	return &Processor{
-		inputChan:  inputChan,
-		outputChan: outputChan,
-		encoder:    encoder,
-		prefixer:   prefixer,
-		done:       make(chan struct{}),
+		inputChan:       inputChan,
+		outputChan:      outputChan,
+		processingRules: processingRules,
+		encoder:         encoder,
+		done:            make(chan struct{}),
 	}
 }
 
@@ -51,16 +52,17 @@ func (p *Processor) run() {
 		p.done <- struct{}{}
 	}()
 	for msg := range p.inputChan {
-		if shouldProcess, redactedMsg := applyRedactingRules(msg); shouldProcess {
+		metrics.LogsDecoded.Add(1)
+		if shouldProcess, redactedMsg := p.applyRedactingRules(msg); shouldProcess {
+			metrics.LogsProcessed.Add(1)
+
 			// Encode the message to its final format
 			content, err := p.encoder.encode(msg, redactedMsg)
 			if err != nil {
 				log.Error("unable to encode msg ", err)
 				continue
 			}
-			// Prefix the message with the API key
-			content = p.prefixer.prefix(content)
-			msg.SetContent(content)
+			msg.Content = content
 			p.outputChan <- msg
 		}
 	}
@@ -68,20 +70,21 @@ func (p *Processor) run() {
 
 // applyRedactingRules returns given a message if we should process it or not,
 // and a copy of the message with some fields redacted, depending on config
-func applyRedactingRules(msg message.Message) (bool, []byte) {
-	content := msg.Content()
-	for _, rule := range msg.GetOrigin().LogSource.Config.ProcessingRules {
+func (p *Processor) applyRedactingRules(msg *message.Message) (bool, []byte) {
+	content := msg.Content
+	rules := append(p.processingRules, msg.Origin.LogSource.Config.ProcessingRules...)
+	for _, rule := range rules {
 		switch rule.Type {
 		case config.ExcludeAtMatch:
-			if rule.Reg.Match(content) {
+			if rule.Regex.Match(content) {
 				return false, nil
 			}
 		case config.IncludeAtMatch:
-			if !rule.Reg.Match(content) {
+			if !rule.Regex.Match(content) {
 				return false, nil
 			}
 		case config.MaskSequences:
-			content = rule.Reg.ReplaceAllLiteral(content, rule.ReplacePlaceholderBytes)
+			content = rule.Regex.ReplaceAllLiteral(content, rule.Placeholder)
 		}
 	}
 	return true, content

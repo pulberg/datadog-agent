@@ -19,15 +19,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/apiserver"
+	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/clustername"
 )
 
 const (
-	setupTimeout = 10 * time.Second
+	setupTimeout     = 10 * time.Second
+	eventReadTimeout = 500 * time.Millisecond
 )
 
 type testSuite struct {
@@ -37,6 +37,7 @@ type testSuite struct {
 }
 
 func TestSuiteKube(t *testing.T) {
+	mockConfig := config.Mock()
 	s := &testSuite{}
 
 	// Start compose stack
@@ -50,7 +51,7 @@ func TestSuiteKube(t *testing.T) {
 	pwd, err := os.Getwd()
 	require.Nil(t, err)
 	s.kubeConfigPath = filepath.Join(pwd, "testdata", "kubeconfig.json")
-	config.Datadog.Set("kubernetes_kubeconfig_path", s.kubeConfigPath)
+	mockConfig.Set("kubernetes_kubeconfig_path", s.kubeConfigPath)
 	_, err = os.Stat(s.kubeConfigPath)
 	require.Nil(t, err, fmt.Sprintf("%v", err))
 
@@ -75,7 +76,7 @@ func (suite *testSuite) SetupTest() {
 			}
 			// Confirm that we can query the kube-apiserver's resources
 			log.Debugf("trying to get LatestEvents")
-			_, _, resV, err := suite.apiClient.LatestEvents("0")
+			_, _, resV, err := suite.apiClient.LatestEvents("0", eventReadTimeout)
 			if err == nil {
 				log.Debugf("successfully get LatestEvents: %s", resV)
 				return
@@ -86,28 +87,30 @@ func (suite *testSuite) SetupTest() {
 }
 
 func (suite *testSuite) TestKubeEvents() {
+	mockConfig := config.Mock()
+
 	// Init own client to write the events
-	config.Datadog.Set("kubernetes_kubeconfig_path", suite.kubeConfigPath)
+	mockConfig.Set("kubernetes_kubeconfig_path", suite.kubeConfigPath)
 	c, err := apiserver.GetAPIClient()
 
-	require.Nil(suite.T(), err)
+	require.NoError(suite.T(), err)
 
-	core := c.Client
+	core := c.Cl.CoreV1()
 	require.NotNil(suite.T(), core)
 
 	// Ignore potential startup events
-	_, _, initresversion, err := suite.apiClient.LatestEvents("0")
-	require.Nil(suite.T(), err)
+	_, _, initresversion, err := suite.apiClient.LatestEvents("0", eventReadTimeout)
+	require.NoError(suite.T(), err)
 
 	// Create started event
 	testReference := createObjectReference("default", "integration_test", "event_test")
 	startedEvent := createEvent("default", "test_started", "started", *testReference)
 	_, err = core.Events("default").Create(startedEvent)
-	require.Nil(suite.T(), err)
+	require.NoError(suite.T(), err)
 
 	// Test we get the new started event
-	added, modified, resversion, err := suite.apiClient.LatestEvents(initresversion)
-	require.Nil(suite.T(), err)
+	added, modified, resversion, err := suite.apiClient.LatestEvents(initresversion, eventReadTimeout)
+	require.NoError(suite.T(), err)
 	assert.Len(suite.T(), added, 1)
 	assert.Len(suite.T(), modified, 0)
 	assert.Equal(suite.T(), "started", added[0].Reason)
@@ -115,11 +118,11 @@ func (suite *testSuite) TestKubeEvents() {
 	// Create tick event
 	tickEvent := createEvent("default", "test_tick", "tick", *testReference)
 	_, err = core.Events("default").Create(tickEvent)
-	require.Nil(suite.T(), err)
+	require.NoError(suite.T(), err)
 
 	// Test we get the new tick event
-	added, modified, resversion, err = suite.apiClient.LatestEvents(resversion)
-	require.Nil(suite.T(), err)
+	added, modified, resversion, err = suite.apiClient.LatestEvents(resversion, eventReadTimeout)
+	require.NoError(suite.T(), err)
 	assert.Len(suite.T(), added, 1)
 	assert.Len(suite.T(), modified, 0)
 	assert.Equal(suite.T(), "tick", added[0].Reason)
@@ -129,17 +132,17 @@ func (suite *testSuite) TestKubeEvents() {
 	tickEvent2 := added[0]
 	tickEvent2.Count = pointer2
 	tickEvent3, err := core.Events("default").Update(tickEvent2)
-	require.Nil(suite.T(), err)
+	require.NoError(suite.T(), err)
 
 	// Update tick event a second time
 	pointer3 := int32(3)
 	tickEvent3.Count = pointer3
 	_, err = core.Events("default").Update(tickEvent3)
-	require.Nil(suite.T(), err)
+	require.NoError(suite.T(), err)
 
 	// Test we get the two modified test events
-	added, modified, resversion, err = suite.apiClient.LatestEvents(resversion)
-	require.Nil(suite.T(), err)
+	added, modified, resversion, err = suite.apiClient.LatestEvents(resversion, eventReadTimeout)
+	require.NoError(suite.T(), err)
 	assert.Len(suite.T(), added, 0)
 	assert.Len(suite.T(), modified, 2)
 	assert.Equal(suite.T(), "tick", modified[0].Reason)
@@ -149,170 +152,52 @@ func (suite *testSuite) TestKubeEvents() {
 	assert.EqualValues(suite.T(), modified[0].InvolvedObject.UID, modified[1].InvolvedObject.UID)
 
 	// We should get nothing new now
-	added, modified, resversion, err = suite.apiClient.LatestEvents(resversion)
-	require.Nil(suite.T(), err)
+	added, modified, resversion, err = suite.apiClient.LatestEvents(resversion, eventReadTimeout)
+	require.NoError(suite.T(), err)
 	assert.Len(suite.T(), added, 0)
 	assert.Len(suite.T(), modified, 0)
 
 	// We should get 2+0 events from initresversion
 	// apiserver does not send updates to objects if the add is in the same bucket
-	added, modified, _, err = suite.apiClient.LatestEvents(initresversion)
-	require.Nil(suite.T(), err)
+	added, modified, _, err = suite.apiClient.LatestEvents(initresversion, eventReadTimeout)
+	require.NoError(suite.T(), err)
 	assert.Len(suite.T(), added, 2)
 	assert.Len(suite.T(), modified, 0)
 }
 
-func (suite *testSuite) TestServiceMapper() {
-	client, err := apiserver.GetAPIClient()
-	require.Nil(suite.T(), err)
+func (suite *testSuite) TestHostnameProvider() {
+	mockConfig := config.Mock()
 
-	c := client.Client
-	require.NotNil(suite.T(), c)
+	// Init own client to write the events
+	mockConfig.Set("kubernetes_kubeconfig_path", suite.kubeConfigPath)
+	c, err := apiserver.GetAPIClient()
 
-	// Create a Ready Schedulable node
-	// As we don't have a controller they don't need to have some heartbeat mechanism
-	node := &v1.Node{
-		Spec: v1.NodeSpec{
-			PodCIDR:       "192.168.1.0/24",
-			Unschedulable: false,
-		},
-		Status: v1.NodeStatus{
-			Addresses: []v1.NodeAddress{
-				{
-					Address: "172.31.119.125",
-					Type:    "InternalIP",
-				},
-				{
-					Address: "ip-172-31-119-125.eu-west-1.compute.internal",
-					Type:    "InternalDNS",
-				},
-				{
-					Address: "ip-172-31-119-125.eu-west-1.compute.internal",
-					Type:    "Hostname",
-				},
-			},
-			Conditions: []v1.NodeCondition{
-				{
-					Type:    "Ready",
-					Status:  "True",
-					Reason:  "KubeletReady",
-					Message: "kubelet is posting ready status",
-				},
-			},
-		},
-	}
-	node.Name = "ip-172-31-119-125"
-	_, err = c.Nodes().Create(node)
-	require.Nil(suite.T(), err)
+	require.NoError(suite.T(), err)
 
-	pod := &v1.Pod{
-		Spec: v1.PodSpec{
-			NodeName: node.Name,
-			Containers: []v1.Container{
-				{
-					Name:  "nginx",
-					Image: "nginx:latest",
-				},
-			},
-		},
-	}
-	pod.Name = "nginx"
-	pod.Labels = map[string]string{"app": "nginx"}
-	pendingPod, err := c.Pods("default").Create(pod)
-	require.Nil(suite.T(), err)
+	core := c.Cl.CoreV1()
+	require.NotNil(suite.T(), core)
 
-	pendingPod.Status = v1.PodStatus{
-		Phase:  "Running",
-		PodIP:  "172.17.0.1",
-		HostIP: "172.31.119.125",
-		Conditions: []v1.PodCondition{
-			{
-				Type:   "Ready",
-				Status: "True",
-			},
-		},
-		// mark it ready
-		ContainerStatuses: []v1.ContainerStatus{
-			{
-				Name:  "nginx",
-				Ready: true,
-				Image: "nginx:latest",
-				State: v1.ContainerState{Running: &v1.ContainerStateRunning{StartedAt: metav1.Now()}},
-			},
-		},
-	}
-	_, err = c.Pods("default").UpdateStatus(pendingPod)
-	require.Nil(suite.T(), err)
+	// Create a dummy pod
+	myHostname, err := os.Hostname()
+	require.NoError(suite.T(), err)
+	dummyPod := createPodOnNode("default", myHostname, "target.host")
 
-	svc := &v1.Service{
-		Spec: v1.ServiceSpec{
-			Selector: map[string]string{
-				"app": "nginx",
-			},
-			Ports: []v1.ServicePort{{Port: 443}},
-		},
-	}
-	svc.Name = "nginx-1"
-	_, err = c.Services("default").Create(svc)
-	require.Nil(suite.T(), err)
+	// Register it in the apiserver
+	_, err = core.Pods("default").Create(dummyPod)
+	require.NoError(suite.T(), err)
+	defer core.Pods("default").Delete(myHostname, nil)
 
-	ep := &v1.Endpoints{
-		Subsets: []v1.EndpointSubset{
-			{
-				Addresses: []v1.EndpointAddress{
-					{
-						IP:       pendingPod.Status.PodIP,
-						NodeName: &node.Name,
-					},
-				},
-				Ports: []v1.EndpointPort{
-					{
-						Name:     "https",
-						Port:     443,
-						Protocol: "TCP",
-					},
-				},
-			},
-		},
-	}
-	ep.Name = "nginx-1"
-	_, err = c.Endpoints("default").Create(ep)
-	require.Nil(suite.T(), err)
+	// Hostname provider should return the expected value
+	foundHost, err := apiserver.HostnameProvider()
+	assert.Equal(suite.T(), "target.host", foundHost)
 
-	apiClient, err := apiserver.GetAPIClient()
-	require.Nil(suite.T(), err)
-	err = apiClient.ClusterMetadataMapping()
-	require.Nil(suite.T(), err)
+	// Testing hostname when a cluster name is set
+	var testClusterName = "Laika"
+	mockConfig.Set("cluster_name", testClusterName)
+	clustername.ResetClusterName()
+	defer mockConfig.Set("cluster_name", "")
+	defer clustername.ResetClusterName()
 
-	metadataNames, err := apiserver.GetPodMetadataNames(node.Name, pod.Name)
-	require.Nil(suite.T(), err)
-	assert.Len(suite.T(), metadataNames, 1)
-	assert.Contains(suite.T(), metadataNames, "kube_service:nginx-1")
-
-	// Add a new service/endpoint on the nginx Pod
-	svc.Name = "nginx-2"
-	_, err = c.Services("default").Create(svc)
-	require.Nil(suite.T(), err)
-
-	ep.Name = "nginx-2"
-	_, err = c.Endpoints("default").Create(ep)
-	require.Nil(suite.T(), err)
-
-	err = apiClient.ClusterMetadataMapping()
-	require.Nil(suite.T(), err)
-
-	metadataNames, err = apiserver.GetPodMetadataNames(node.Name, pod.Name)
-	require.Nil(suite.T(), err)
-	assert.Len(suite.T(), metadataNames, 2)
-	assert.Contains(suite.T(), metadataNames, "kube_service:nginx-1")
-	assert.Contains(suite.T(), metadataNames, "kube_service:nginx-2")
-
-	fullmapper, errList := apiserver.GetMetadataMapBundleOnAllNodes()
-	require.Nil(suite.T(), errList)
-	list := fullmapper["Nodes"]
-	assert.Contains(suite.T(), list, "ip-172-31-119-125")
-	fullMap := list.(map[string]*apiserver.MetadataMapperBundle)
-	services, found := fullMap["ip-172-31-119-125"].ServicesForPod("nginx")
-	assert.True(suite.T(), found)
-	assert.Contains(suite.T(), services, "nginx-1")
+	foundHost, err = apiserver.HostnameProvider()
+	assert.Equal(suite.T(), "target.host-Laika", foundHost)
 }

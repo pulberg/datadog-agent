@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build cpython
 
@@ -19,6 +19,7 @@
 PyObject* GetVersion(PyObject *self, PyObject *args);
 PyObject* Headers(PyObject *self, PyObject *args);
 PyObject* GetHostname(PyObject *self, PyObject *args);
+PyObject* GetClusterName(PyObject *self, PyObject *args);
 PyObject* LogMessage(char *message, int logLevel);
 PyObject* GetConfig(char *key);
 PyObject* GetSubprocessOutput(char **args, int argc, int raise);
@@ -234,6 +235,7 @@ static PyMethodDef datadogAgentMethods[] = {
   {"get_config", get_config, METH_VARARGS, "Get value from the agent configuration."},
   {"headers", Headers, METH_VARARGS | METH_KEYWORDS, "Get basic HTTP headers with the right UserAgent."},
   {"get_hostname", GetHostname, METH_VARARGS, "Get the agent hostname."},
+  {"get_clustername", GetClusterName, METH_VARARGS, "Get the agent cluster name."},
   {"log", log_message, METH_VARARGS, "Log a message through the agent logger."},
   {"set_external_tags", set_external_tags, METH_VARARGS, "Send external host tags."},
   {NULL, NULL}

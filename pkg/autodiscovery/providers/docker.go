@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build docker
 
@@ -39,7 +39,7 @@ func NewDockerConfigProvider(config config.ConfigurationProviders) (ConfigProvid
 
 // String returns a string representation of the DockerConfigProvider
 func (d *DockerConfigProvider) String() string {
-	return "Docker container labels"
+	return Docker
 }
 
 // Collect retrieves all running containers and extract AD templates from their labels.
@@ -120,16 +120,13 @@ func (d *DockerConfigProvider) IsUpToDate() (bool, error) {
 func parseDockerLabels(containers map[string]map[string]string) ([]integration.Config, error) {
 	var configs []integration.Config
 	for cID, labels := range containers {
-		c, err := extractTemplatesFromMap(docker.ContainerIDToEntityName(cID), labels, dockerADLabelPrefix)
-		switch {
-		case err != nil:
+		c, errors := extractTemplatesFromMap(docker.ContainerIDToEntityName(cID), labels, dockerADLabelPrefix)
+
+		for _, err := range errors {
 			log.Errorf("Can't parse template for container %s: %s", cID, err)
-			continue
-		case len(c) == 0:
-			continue
-		default:
-			configs = append(configs, c...)
 		}
+
+		configs = append(configs, c...)
 	}
 	return configs, nil
 }

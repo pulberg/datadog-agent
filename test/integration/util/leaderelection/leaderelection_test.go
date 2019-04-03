@@ -43,6 +43,7 @@ type apiserverSuite struct {
 }
 
 func TestSuiteAPIServer(t *testing.T) {
+	mockConfig := config.Mock()
 	s := &apiserverSuite{}
 
 	// Start compose stack
@@ -59,7 +60,7 @@ func TestSuiteAPIServer(t *testing.T) {
 	pwd, err := os.Getwd()
 	require.Nil(t, err)
 	s.kubeConfigPath = filepath.Join(pwd, "testdata", "kubeconfig.json")
-	config.Datadog.Set("kubernetes_kubeconfig_path", s.kubeConfigPath)
+	mockConfig.Set("kubernetes_kubeconfig_path", s.kubeConfigPath)
 	_, err = os.Stat(s.kubeConfigPath)
 	require.Nil(t, err, fmt.Sprintf("%v", err))
 
@@ -103,7 +104,7 @@ func (suite *apiserverSuite) waitForLeaderName(le *leaderelection.LeaderEngine) 
 	for {
 		select {
 		case <-tick.C:
-			leaderName = le.CurrentLeaderName()
+			leaderName = le.GetLeader()
 			if leaderName == le.HolderIdentity {
 				log.Infof("Waiting for leader: leader is %q", leaderName)
 				return
@@ -162,11 +163,11 @@ func (suite *apiserverSuite) TestLeaderElectionMulti() {
 
 	for i, testCase := range testCases {
 		assert.Equal(suite.T(), fmt.Sprintf("%s%d", baseIdentityName, i), testCase.leaderEngine.HolderIdentity)
-		assert.Equal(suite.T(), actualLeader.HolderIdentity, testCase.leaderEngine.CurrentLeaderName())
+		assert.Equal(suite.T(), actualLeader.HolderIdentity, testCase.leaderEngine.GetLeader())
 	}
 
 	c, err := apiserver.GetAPIClient()
-	client := c.Client
+	client := c.Cl.CoreV1()
 
 	require.Nil(suite.T(), err)
 	cmList, err := client.ConfigMaps(metav1.NamespaceDefault).List(metav1.ListOptions{})

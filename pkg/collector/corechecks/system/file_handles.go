@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 // +build !windows
 
 package system
@@ -12,12 +12,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
+	"github.com/DataDog/datadog-agent/pkg/aggregator"
 	"github.com/DataDog/datadog-agent/pkg/collector/check"
 	core "github.com/DataDog/datadog-agent/pkg/collector/corechecks"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
-
-	"github.com/DataDog/datadog-agent/pkg/aggregator"
 )
 
 const fileHandlesCheckName = "file_handle"
@@ -64,34 +62,28 @@ func (c *fhCheck) Run() error {
 		log.Errorf("Could not gather \"allocated file handle\" value")
 		return err
 	}
-	log.Debugf("allocated file handles: %f", allocatedFh)
 
 	allocatedUnusedFh, err := strconv.ParseFloat(fileNrValues[1], 64)
 	if err != nil {
 		log.Errorf("Could not gather \"allocated unused file handle\" value")
 		return err
 	}
-	log.Debugf("allocated unused file handles: %f", allocatedUnusedFh)
 
 	maxFh, err := strconv.ParseFloat(fileNrValues[2], 64)
 	if err != nil {
 		log.Errorf("Could not parse \"maximum file handle\" value")
 		return err
 	}
-	log.Debugf("maximum file handles: %f", maxFh)
 
 	fhInUse := (allocatedFh - allocatedUnusedFh) / maxFh
-	log.Debugf("file handles in use: %f", fhInUse)
 
+	sender.Gauge("system.fs.file_handles.allocated", allocatedFh, "", nil)
+	sender.Gauge("system.fs.file_handles.allocated_unused", allocatedUnusedFh, "", nil)
 	sender.Gauge("system.fs.file_handles.in_use", fhInUse, "", nil)
+	sender.Gauge("system.fs.file_handles.used", allocatedFh-allocatedUnusedFh, "", nil)
+	sender.Gauge("system.fs.file_handles.max", maxFh, "", nil)
 	sender.Commit()
 
-	return nil
-}
-
-// The check doesn't need configuration
-func (c *fhCheck) Configure(data integration.Data, initConfig integration.Data) error {
-	// do nothing
 	return nil
 }
 

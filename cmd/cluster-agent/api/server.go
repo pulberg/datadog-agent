@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 /*
 Package api implements the agent IPC api. Using HTTP
@@ -20,11 +20,13 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gorilla/mux"
+
 	"github.com/DataDog/datadog-agent/cmd/cluster-agent/api/agent"
 	"github.com/DataDog/datadog-agent/pkg/api/security"
 	"github.com/DataDog/datadog-agent/pkg/api/util"
+	"github.com/DataDog/datadog-agent/pkg/clusteragent"
 	"github.com/DataDog/datadog-agent/pkg/config"
-	"github.com/gorilla/mux"
 )
 
 var (
@@ -32,12 +34,12 @@ var (
 )
 
 // StartServer creates the router and starts the HTTP server
-func StartServer() error {
+func StartServer(sc clusteragent.ServerContext) error {
 	// create the root HTTP router
 	r := mux.NewRouter()
 
 	// IPC REST API server
-	agent.SetupHandlers(r)
+	agent.SetupHandlers(r, sc)
 
 	// Validate token for every request
 	r.Use(validateToken)
@@ -79,8 +81,10 @@ func StartServer() error {
 	}
 
 	srv := &http.Server{
-		Handler:   r,
-		ErrorLog:  stdLog.New(&config.ErrorLogWriter{}, "", 0), // log errors to seelog
+		Handler: r,
+		ErrorLog: stdLog.New(&config.ErrorLogWriter{
+			AdditionalDepth: 4, // Use a stack depth of 4 on top of the default one to get a relevant filename in the stdlib
+		}, "Error from the agent http API server: ", 0), // log errors to seelog,
 		TLSConfig: &tlsConfig,
 	}
 
@@ -88,7 +92,6 @@ func StartServer() error {
 
 	go srv.Serve(tlsListener)
 	return nil
-
 }
 
 // StopServer closes the connection and the server
@@ -104,15 +107,26 @@ func StopServer() {
 func validateToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.String()
-		if strings.HasPrefix(path, "/api/v1/metadata/") && len(strings.Split(path, "/")) == 6 {
-			if err := util.ValidateDCARequest(w, r); err != nil {
-				return
+		var isValid bool
+		if !isExternalPath(path) {
+			if err := util.Validate(w, r); err == nil {
+				isValid = true
 			}
-		} else {
-			if err := util.Validate(w, r); err != nil {
+		}
+		if !isValid {
+			if err := util.ValidateDCARequest(w, r); err != nil {
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isExternal returns whether the path is an endpoint used by Node Agents.
+func isExternalPath(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/metadata/") && len(strings.Split(path, "/")) == 7 || // support for agents < 6.5.0
+		path == "/version" ||
+		strings.HasPrefix(path, "/api/v1/tags/pod/") && (len(strings.Split(path, "/")) == 6 || len(strings.Split(path, "/")) == 8) ||
+		strings.HasPrefix(path, "/api/v1/tags/node/") && len(strings.Split(path, "/")) == 6 ||
+		strings.HasPrefix(path, "/api/v1/clusterchecks/") && len(strings.Split(path, "/")) == 6
 }

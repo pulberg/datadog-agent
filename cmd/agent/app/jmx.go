@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build jmx
 
@@ -9,13 +9,14 @@ package app
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/DataDog/datadog-agent/cmd/agent/api"
 	"github.com/DataDog/datadog-agent/cmd/agent/common"
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
 	"github.com/DataDog/datadog-agent/pkg/collector/check"
-	"github.com/DataDog/datadog-agent/pkg/collector/corechecks/embed"
+	"github.com/DataDog/datadog-agent/pkg/collector/corechecks/embed/jmx"
 	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/jmxfetch"
 	"github.com/spf13/cobra"
@@ -76,10 +77,13 @@ var (
 		RunE:  doJmxListNotCollected,
 	}
 
-	checks = []string{}
+	checks      = []string{}
+	jmxLogLevel string
 )
 
 func init() {
+	jmxCmd.PersistentFlags().StringVarP(&jmxLogLevel, "log-level", "l", "debug", "set the log level")
+
 	// attach list and collect commands to jmx command
 	jmxCmd.AddCommand(jmxListCmd)
 	jmxCmd.AddCommand(jmxCollectCmd)
@@ -119,16 +123,18 @@ func doJmxListNotCollected(cmd *cobra.Command, args []string) error {
 }
 
 func setupAgent() error {
+	overrides := make(map[string]interface{})
 
+	// let the os assign an available port
+	overrides["cmd_port"] = 0
+
+	config.SetOverrides(overrides)
 	err := common.SetupConfig(confFilePath)
 	if err != nil {
 		return fmt.Errorf("unable to set up global agent configuration: %v", err)
 	}
 
 	common.SetupAutoConfig(config.Datadog.GetString("confd_path"))
-
-	// let the os assign an available port
-	config.Datadog.Set("cmd_port", 0)
 
 	// start the cmd HTTP server
 	if err := api.StartServer(); err != nil {
@@ -139,7 +145,13 @@ func setupAgent() error {
 }
 
 func runJmxCommand(command string) error {
-	err := setupAgent()
+	err := config.SetupLogger(loggerName, jmxLogLevel, "", "", false, true, false)
+	if err != nil {
+		fmt.Printf("Cannot setup logger, exiting: %v\n", err)
+		return err
+	}
+
+	err = setupAgent()
 	if err != nil {
 		return err
 	}
@@ -152,7 +164,7 @@ func runJmxCommand(command string) error {
 
 	loadConfigs()
 
-	err = runner.Start()
+	err = runner.Start(false)
 	if err != nil {
 		return err
 	}
@@ -163,6 +175,9 @@ func runJmxCommand(command string) error {
 	}
 
 	fmt.Println("JMXFetch exited successfully. If nothing was displayed please check your configuration, flags and the JMXFetch log file.")
+	if runtime.GOOS == "windows" {
+		printWindowsUserWarning("jmx")
+	}
 	return nil
 }
 
@@ -175,7 +190,7 @@ func loadConfigs() {
 	for _, c := range configs {
 		if check.IsJMXConfig(c.Name, c.InitConfig) && (includeEverything || configIncluded(c)) {
 			fmt.Println("Config ", c.Name, " was loaded.")
-			embed.AddJMXCachedConfig(c)
+			jmx.AddScheduledConfig(c)
 		}
 	}
 }

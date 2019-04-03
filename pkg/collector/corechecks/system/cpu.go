@@ -1,20 +1,21 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
+// +build !windows
 
 package system
 
 import (
 	"fmt"
 
+	"github.com/shirou/gopsutil/cpu"
+
+	"github.com/DataDog/datadog-agent/pkg/aggregator"
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
 	"github.com/DataDog/datadog-agent/pkg/collector/check"
 	core "github.com/DataDog/datadog-agent/pkg/collector/corechecks"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
-	"github.com/shirou/gopsutil/cpu"
-
-	"github.com/DataDog/datadog-agent/pkg/aggregator"
 )
 
 const cpuCheckName = "cpu"
@@ -76,9 +77,12 @@ func (c *CPUCheck) Run() error {
 	return nil
 }
 
-// Configure the CPU check doesn't need configuration
+// Configure the CPU check
 func (c *CPUCheck) Configure(data integration.Data, initConfig integration.Data) error {
-	// do nothing
+	err := c.CommonConfigure(data)
+	if err != nil {
+		return err
+	}
 	// NOTE: This runs before the python checks, so we should be good, but cpuInfo()
 	//       on windows initializes COM to the multithreaded model. Therefore,
 	//       if a python check has run on this native windows thread prior and

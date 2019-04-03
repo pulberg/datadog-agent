@@ -1,16 +1,15 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package aggregator
 
 import (
-	"github.com/DataDog/datadog-agent/pkg/util/log"
-
 	"github.com/DataDog/datadog-agent/pkg/aggregator/ckey"
 	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/metrics"
+	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
 const defaultExpiry = 300.0 // number of seconds after which contexts are expired
@@ -28,18 +27,16 @@ type TimeSampler struct {
 	interval                    int64
 	contextResolver             *ContextResolver
 	metricsByTimestamp          map[int64]metrics.ContextMetrics
-	defaultHostname             string
 	counterLastSampledByContext map[ckey.ContextKey]float64
 	lastCutOffTime              int64
 }
 
 // NewTimeSampler returns a newly initialized TimeSampler
-func NewTimeSampler(interval int64, defaultHostname string) *TimeSampler {
+func NewTimeSampler(interval int64) *TimeSampler {
 	return &TimeSampler{
 		interval:                    interval,
 		contextResolver:             newContextResolver(),
 		metricsByTimestamp:          map[int64]metrics.ContextMetrics{},
-		defaultHostname:             defaultHostname,
 		counterLastSampledByContext: map[ckey.ContextKey]float64{},
 	}
 }
@@ -128,11 +125,7 @@ func (s *TimeSampler) flush(timestamp float64) metrics.Series {
 			}
 			serie.Name = context.Name + serie.NameSuffix
 			serie.Tags = context.Tags
-			if context.Host != "" {
-				serie.Host = context.Host
-			} else {
-				serie.Host = s.defaultHostname
-			}
+			serie.Host = context.Host
 			serie.Interval = s.interval
 
 			serieBySignature[serieSignature] = serie

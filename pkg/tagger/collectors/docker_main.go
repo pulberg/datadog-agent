@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build docker
 
@@ -9,11 +9,10 @@ package collectors
 
 import (
 	"io"
-	"strings"
 
+	"github.com/DataDog/datadog-agent/pkg/util/containers"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 
-	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/status/health"
 	"github.com/DataDog/datadog-agent/pkg/util/docker"
 )
@@ -45,19 +44,9 @@ func (c *DockerCollector) Detect(out chan<- []*TagInfo) (CollectionMode, error) 
 	c.infoOut = out
 
 	// We lower-case the values collected by viper as well as the ones from inspecting the labels of containers.
-	labelsList := config.Datadog.GetStringMapString("docker_labels_as_tags")
-	for label, value := range labelsList {
-		delete(labelsList, label)
-		labelsList[strings.ToLower(label)] = value
-	}
-	c.labelsAsTags = labelsList
+	c.labelsAsTags = retrieveMappingFromConfig("docker_labels_as_tags")
+	c.envAsTags = retrieveMappingFromConfig("docker_env_as_tags")
 
-	envList := config.Datadog.GetStringMapString("docker_env_as_tags")
-	for env, value := range envList {
-		delete(envList, env)
-		envList[strings.ToLower(env)] = value
-	}
-	c.envAsTags = envList
 	// TODO: list and inspect existing containers once docker utils are merged
 
 	return StreamCollection, nil
@@ -98,10 +87,10 @@ func (c *DockerCollector) Stop() error {
 }
 
 // Fetch inspect a given container to get its tags on-demand (cache miss)
-func (c *DockerCollector) Fetch(container string) ([]string, []string, error) {
-	cID := strings.TrimPrefix(container, docker.DockerEntityPrefix)
-	if cID == container || len(cID) == 0 {
-		return nil, nil, nil
+func (c *DockerCollector) Fetch(entity string) ([]string, []string, []string, error) {
+	runtime, cID := containers.SplitEntityName(entity)
+	if runtime != containers.RuntimeNameDocker || len(cID) == 0 {
+		return nil, nil, nil, nil
 	}
 	return c.fetchForDockerID(cID)
 }
@@ -113,20 +102,26 @@ func (c *DockerCollector) processEvent(e *docker.ContainerEvent) {
 	case "die":
 		info = &TagInfo{Entity: e.ContainerEntityName(), Source: dockerCollectorName, DeleteEntity: true}
 	case "start":
-		low, high, _ := c.fetchForDockerID(e.ContainerID)
-		info = &TagInfo{Entity: e.ContainerEntityName(), Source: dockerCollectorName, LowCardTags: low, HighCardTags: high}
+		low, orchestrator, high, _ := c.fetchForDockerID(e.ContainerID)
+		info = &TagInfo{
+			Entity:               e.ContainerEntityName(),
+			Source:               dockerCollectorName,
+			LowCardTags:          low,
+			OrchestratorCardTags: orchestrator,
+			HighCardTags:         high,
+		}
 	default:
 		return // Nothing to see here
 	}
 	c.infoOut <- []*TagInfo{info}
 }
 
-func (c *DockerCollector) fetchForDockerID(cID string) ([]string, []string, error) {
+func (c *DockerCollector) fetchForDockerID(cID string) ([]string, []string, []string, error) {
 	co, err := c.dockerUtil.Inspect(cID, false)
 	if err != nil {
 		// TODO separate "not found" and inspect error
-		log.Errorf("Failed to inspect container %s - %s", cID, err)
-		return nil, nil, err
+		log.Debugf("Failed to inspect container %s - %s", cID, err)
+		return nil, nil, nil, err
 	}
 	return c.extractFromInspect(co)
 }

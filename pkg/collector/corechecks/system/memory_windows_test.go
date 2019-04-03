@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build windows
 
@@ -11,12 +11,12 @@ import (
 	"testing"
 
 	"github.com/DataDog/datadog-agent/pkg/aggregator/mocksender"
-	"github.com/shirou/gopsutil/mem"
+	"github.com/DataDog/datadog-agent/pkg/util/winutil"
 	"github.com/stretchr/testify/require"
 )
 
-func VirtualMemory() (*mem.VirtualMemoryStat, error) {
-	return &mem.VirtualMemoryStat{
+func VirtualMemory() (*winutil.VirtualMemoryStat, error) {
+	return &winutil.VirtualMemoryStat{
 		Total:       12345667890,
 		Available:   234567890,
 		Used:        10000000000,
@@ -24,14 +24,12 @@ func VirtualMemory() (*mem.VirtualMemoryStat, error) {
 	}, nil
 }
 
-func SwapMemory() (*mem.SwapMemoryStat, error) {
-	return &mem.SwapMemoryStat{
+func SwapMemory() (*winutil.SwapMemoryStat, error) {
+	return &winutil.SwapMemoryStat{
 		Total:       100000,
 		Used:        40000,
 		Free:        60000,
 		UsedPercent: 40,
-		Sin:         21,
-		Sout:        22,
 	}, nil
 }
 

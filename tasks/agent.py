@@ -13,10 +13,11 @@ import invoke
 from invoke import task
 from invoke.exceptions import Exit
 
-from .utils import bin_name, get_build_flags, get_version_numeric_only, load_release_versions
+from .utils import bin_name, get_build_flags, get_version_numeric_only, load_release_versions, get_version
 from .utils import REPO_PATH
-from .build_tags import get_build_tags, get_default_build_tags, LINUX_ONLY_TAGS, DEBIAN_ONLY_TAGS
+from .build_tags import get_build_tags, get_default_build_tags, LINUX_ONLY_TAGS, REDHAT_AND_DEBIAN_ONLY_TAGS, REDHAT_AND_DEBIAN_DIST
 from .go import deps
+from .docker import pull_base_images
 
 # constants
 BIN_PATH = os.path.join(".", "bin", "agent")
@@ -24,7 +25,9 @@ AGENT_TAG = "datadog/agent:master"
 DEFAULT_BUILD_TAGS = [
     "apm",
     "consul",
+    "containerd",
     "cpython",
+    "cri",
     "docker",
     "ec2",
     "etcd",
@@ -33,39 +36,68 @@ DEFAULT_BUILD_TAGS = [
     "kubeapiserver",
     "kubelet",
     "log",
+    "netcgo",
     "systemd",
     "process",
-    "snmp",
     "zk",
     "zlib",
+    "secrets",
 ]
 
+AGENT_CORECHECKS = [
+    "cpu",
+    "cri",
+    "containerd",
+    "docker",
+    "file_handle",
+    "go_expvar",
+    "io",
+    "jmx",
+    "kubernetes_apiserver",
+    "load",
+    "memory",
+    "ntp",
+    "uptime",
+    "winproc",
+]
+
+PUPPY_CORECHECKS = [
+    "cpu",
+    "disk",
+    "io",
+    "load",
+    "memory",
+    "network",
+    "ntp",
+    "uptime",
+]
 
 @task
 def build(ctx, rebuild=False, race=False, build_include=None, build_exclude=None,
           puppy=False, use_embedded_libs=False, development=True, precompile_only=False,
-          skip_assets=False):
+          skip_assets=False, use_venv=False):
     """
     Build the agent. If the bits to include in the build are not specified,
     the values from `invoke.yaml` will be used.
 
     Example invokation:
-        inv agent.build --build-exclude=snmp,systemd
+        inv agent.build --build-exclude=systemd
     """
+
     build_include = DEFAULT_BUILD_TAGS if build_include is None else build_include.split(",")
     build_exclude = [] if build_exclude is None else build_exclude.split(",")
 
-    ldflags, gcflags, env = get_build_flags(ctx, use_embedded_libs=use_embedded_libs)
+    ldflags, gcflags, env = get_build_flags(ctx, use_embedded_libs=use_embedded_libs, use_venv=use_venv)
 
     if not sys.platform.startswith('linux'):
         for ex in LINUX_ONLY_TAGS:
             if ex not in build_exclude:
                 build_exclude.append(ex)
 
-    # remove all tags that are only availaible on debian distributions
+    # remove all tags that are only available on debian distributions
     distname = platform.linux_distribution()[0].lower()
-    if distname not in ['debian', 'ubuntu']:
-        for ex in DEBIAN_ONLY_TAGS:
+    if distname not in REDHAT_AND_DEBIAN_DIST:
+        for ex in REDHAT_AND_DEBIAN_ONLY_TAGS:
             if ex not in build_exclude:
                 build_exclude.append(ex)
 
@@ -94,12 +126,13 @@ def build(ctx, rebuild=False, race=False, build_include=None, build_exclude=None
         build_tags = get_build_tags(build_include, build_exclude)
 
     cmd = "go build {race_opt} {build_type} -tags \"{go_build_tags}\" "
+
     cmd += "-o {agent_bin} -gcflags=\"{gcflags}\" -ldflags=\"{ldflags}\" {REPO_PATH}/cmd/agent"
     args = {
         "race_opt": "-race" if race else "",
         "build_type": "-a" if rebuild else ("-i" if precompile_only else ""),
         "go_build_tags": " ".join(build_tags),
-        "agent_bin": os.path.join(BIN_PATH, bin_name("agent")),
+        "agent_bin": os.path.join(BIN_PATH, bin_name("agent", android=False)),
         "gcflags": gcflags,
         "ldflags": ldflags,
         "REPO_PATH": REPO_PATH,
@@ -118,11 +151,11 @@ def build(ctx, rebuild=False, race=False, build_include=None, build_exclude=None
     ctx.run(cmd.format(REPO_PATH), env=env)
 
     if not skip_assets:
-        refresh_assets(ctx, development=development)
+        refresh_assets(ctx, build_tags, development=development, puppy=puppy)
 
 
 @task
-def refresh_assets(ctx, development=True):
+def refresh_assets(ctx, build_tags, development=True, puppy=False):
     """
     Clean up and refresh Collector's assets and config files
     """
@@ -133,14 +166,33 @@ def refresh_assets(ctx, development=True):
     dist_folder = os.path.join(BIN_PATH, "dist")
     if os.path.exists(dist_folder):
         shutil.rmtree(dist_folder)
-    copy_tree("./cmd/agent/dist/", dist_folder)
+    os.mkdir(dist_folder)
+
+    if "cpython" in build_tags:
+        copy_tree("./cmd/agent/dist/checks/", os.path.join(dist_folder, "checks"))
+        copy_tree("./cmd/agent/dist/utils/", os.path.join(dist_folder, "utils"))
+        shutil.copy("./cmd/agent/dist/config.py", os.path.join(dist_folder, "config.py"))
+    if not puppy:
+        shutil.copy("./cmd/agent/dist/dd-agent", os.path.join(dist_folder, "dd-agent"))
+        # copy the dd-agent placeholder to the bin folder
+        bin_ddagent = os.path.join(BIN_PATH, "dd-agent")
+        shutil.move(os.path.join(dist_folder, "dd-agent"), bin_ddagent)
+
+    # Network tracer not supported on windows
+    if sys.platform.startswith('linux'):
+      shutil.copy("./cmd/agent/dist/network-tracer.yaml", os.path.join(dist_folder, "network-tracer.yaml"))
+    shutil.copy("./cmd/agent/dist/datadog.yaml", os.path.join(dist_folder, "datadog.yaml"))
+
+    for check in AGENT_CORECHECKS if not puppy else PUPPY_CORECHECKS:
+        check_dir = os.path.join(dist_folder, "conf.d/{}.d/".format(check))
+        copy_tree("./cmd/agent/dist/conf.d/{}.d/".format(check), check_dir)
+    if "apm" in build_tags:
+        shutil.copy("./cmd/agent/dist/conf.d/apm.yaml.default", os.path.join(dist_folder, "conf.d/apm.yaml.default"))
+
     copy_tree("./pkg/status/dist/", dist_folder)
     copy_tree("./cmd/agent/gui/views", os.path.join(dist_folder, "views"))
     if development:
         copy_tree("./dev/dist/", dist_folder)
-    # copy the dd-agent placeholder to the bin folder
-    bin_ddagent = os.path.join(BIN_PATH, "dd-agent")
-    shutil.move(os.path.join(dist_folder, "dd-agent"), bin_ddagent)
 
 
 @task
@@ -167,7 +219,7 @@ def system_tests(ctx):
 
 
 @task
-def image_build(ctx, base_dir="omnibus"):
+def image_build(ctx, base_dir="omnibus", skip_tests=False):
     """
     Build the docker image
     """
@@ -181,9 +233,17 @@ def image_build(ctx, base_dir="omnibus"):
         raise Exit(code=1)
     latest_file = max(list_of_files, key=os.path.getctime)
     shutil.copy2(latest_file, "Dockerfiles/agent/")
-    ctx.run("docker build -t {} Dockerfiles/agent".format(AGENT_TAG))
-    ctx.run("rm Dockerfiles/agent/datadog-agent*_amd64.deb")
 
+    # Pull base image with content trust enabled
+    pull_base_images(ctx, "Dockerfiles/agent/Dockerfile", signed_pull=True)
+
+    # Build with the testing target
+    if not skip_tests:
+        ctx.run("docker build -t {} --target testing Dockerfiles/agent".format(AGENT_TAG))
+
+    # Build with the release target
+    ctx.run("docker build -t {} --target release Dockerfiles/agent".format(AGENT_TAG))
+    ctx.run("rm Dockerfiles/agent/datadog-agent*_amd64.deb")
 
 @task
 def integration_tests(ctx, install_deps=False, race=False, remote_docker=False):
@@ -222,7 +282,7 @@ def omnibus_build(ctx, puppy=False, log_level="info", base_dir=None, gem_path=No
     Build the Agent packages with Omnibus Installer.
     """
     if not skip_deps:
-        deps(ctx)
+        deps(ctx, no_checks=True)  # no_checks since the omnibus build installs checks with a dedicated software def
 
     # omnibus config overrides
     overrides = []
@@ -256,6 +316,7 @@ def omnibus_build(ctx, puppy=False, log_level="info", base_dir=None, gem_path=No
             args['populate_s3_cache'] = " --populate-s3-cache "
         if skip_sign:
             env['SKIP_SIGN_MAC'] = 'true'
+        env['PACKAGE_VERSION'] = get_version(ctx, include_git=True, url_safe=True)
         ctx.run(cmd.format(**args), env=env)
 
 
@@ -271,3 +332,15 @@ def clean(ctx):
     # remove the bin/agent folder
     print("Remove agent binary folder")
     ctx.run("rm -rf ./bin/agent")
+
+
+@task
+def version(ctx, url_safe=False, git_sha_length=7):
+    """
+    Get the agent version.
+    url_safe: get the version that is able to be addressed as a url
+    git_sha_length: different versions of git have a different short sha length,
+                    use this to explicitly set the version
+                    (the windows builder and the default ubuntu version have such an incompatibility)
+    """
+    print(get_version(ctx, include_git=True, url_safe=url_safe, git_sha_length=git_sha_length))

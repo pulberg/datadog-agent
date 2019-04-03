@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 // +build !windows
 
 package system
@@ -52,18 +52,64 @@ var (
 			},
 		},
 	}
+	ioSamplesDM = []map[string]disk.IOCountersStat{
+		{
+			"dm0": {
+				ReadCount:        443071,
+				MergedReadCount:  104744,
+				WriteCount:       10412454,
+				MergedWriteCount: 310860,
+				ReadBytes:        849293 * SectorSize,
+				WriteBytes:       1406995 * SectorSize,
+				ReadTime:         19699308,
+				WriteTime:        418600,
+				IopsInProgress:   0,
+				IoTime:           343324,
+				WeightedIO:       727464,
+				Name:             "sda",
+				SerialNumber:     "987654321WD",
+				Label:            "virtual-1",
+			},
+		},
+	}
 )
 
 var sampleIdx = 0
 
-func ioSampler(names ...string) (map[string]disk.IOCountersStat, error) {
+var ioSampler = func(names ...string) (map[string]disk.IOCountersStat, error) { return sampler(ioSamples, names...) }
+var ioSamplerDM = func(names ...string) (map[string]disk.IOCountersStat, error) { return sampler(ioSamplesDM, names...) }
+
+func sampler(samples []map[string]disk.IOCountersStat, names ...string) (map[string]disk.IOCountersStat, error) {
 	idx := sampleIdx
 	sampleIdx++
-	sampleIdx = sampleIdx % len(ioSamples)
+	sampleIdx = sampleIdx % len(samples)
 	return ioSamples[idx], nil
 }
 
+func TestIOCheckDM(t *testing.T) {
+	ioCounters = ioSamplerDM
+	ioCheck := new(IOCheck)
+	ioCheck.Configure(nil, nil)
+
+	mock := mocksender.NewMockSender(ioCheck.ID())
+
+	switch os := runtime.GOOS; os {
+	case "windows":
+		mock.On("Rate", "system.io.r_s", 443071.0, "", []string{"device:C:"}).Return().Times(1)
+		mock.On("Rate", "system.io.w_s", 10412454.0, "", []string{"device:C:"}).Return().Times(1)
+	default: // Should cover Unices (Linux, OSX, FreeBSD,...)
+		mock.On("Rate", "system.io.r_s", 443071.0, "", []string{"device:dm0", "device_label:virtual-1"}).Return().Times(1)
+		mock.On("Rate", "system.io.w_s", 10412454.0, "", []string{"device:dm0", "device_label:virtual-1"}).Return().Times(1)
+		mock.On("Rate", "system.io.rrqm_s", 104744.0, "", []string{"device:dm0", "device_label:virtual-1"}).Return().Times(1)
+		mock.On("Rate", "system.io.wrqm_s", 310860.0, "", []string{"device:dm0", "device_label:virtual-1"}).Return().Times(1)
+	}
+}
+
 func TestIOCheck(t *testing.T) {
+	startNow := time.Now().UnixNano()
+	nowNano = func() int64 { return startNow } // time of the first run
+	defer func() { nowNano = time.Now().UnixNano }()
+
 	ioCounters = ioSampler
 	ioCheck := new(IOCheck)
 	ioCheck.Configure(nil, nil)
@@ -92,8 +138,8 @@ func TestIOCheck(t *testing.T) {
 	mock.AssertNumberOfCalls(t, "Rate", expectedRates)
 	mock.AssertNumberOfCalls(t, "Commit", 1)
 
-	// sleep for a second, for delta
-	time.Sleep(time.Second)
+	// simulate a 1s interval
+	nowNano = func() int64 { return startNow + int64(1*time.Second) } // time of the second run
 
 	switch os := runtime.GOOS; os {
 	case "windows":
@@ -110,7 +156,7 @@ func TestIOCheck(t *testing.T) {
 		mock.On("Gauge", "system.io.await", 0.0, "", []string{"device:sda"}).Return().Times(1)
 		mock.On("Gauge", "system.io.r_await", 0.0, "", []string{"device:sda"}).Return().Times(1)
 		mock.On("Gauge", "system.io.w_await", 0.0, "", []string{"device:sda"}).Return().Times(1)
-		mock.On("Gauge", "system.io.avg_q_sz", 0.028, "", []string{"device:sda"}).Return().Times(1)
+		mock.On("Gauge", "system.io.avg_q_sz", 0.03, "", []string{"device:sda"}).Return().Times(1)
 		mock.On("Gauge", "system.io.util", 2.8, "", []string{"device:sda"}).Return().Times(1)
 		mock.On("Gauge", "system.io.svctm", 0.0, "", []string{"device:sda"}).Return().Times(1)
 		expectedRates += 4

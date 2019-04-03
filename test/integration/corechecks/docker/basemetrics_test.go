@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package docker
 
@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	log "github.com/cihub/seelog"
+
+	"github.com/DataDog/datadog-agent/pkg/aggregator/mocksender"
 )
 
 func init() {
@@ -17,7 +19,6 @@ func init() {
 
 func TestContainerMetricsTagging(t *testing.T) {
 	expectedTags := []string{
-		instanceTag,                          // Instance tags
 		"container_name:basemetrics_redis_1", // Container name
 		"docker_image:datadog/docker-library:redis_3_2_11-alpine",
 		"image_name:datadog/docker-library",
@@ -34,9 +35,11 @@ func TestContainerMetricsTagging(t *testing.T) {
 			"docker.mem.rss",
 			"docker.mem.in_use",
 			"docker.mem.limit",
+			"docker.mem.failed_count",
 			"docker.mem.soft_limit",
 			"docker.container.size_rw",
 			"docker.container.size_rootfs",
+			"docker.thread.count",
 		},
 		"Rate": {
 			"docker.cpu.system",
@@ -50,7 +53,6 @@ func TestContainerMetricsTagging(t *testing.T) {
 		},
 	}
 	pauseTags := []string{
-		"instanceTag:MustBeHere",
 		"docker_image:kubernetes/pause:latest",
 		"image_name:kubernetes/pause",
 		"image_tag:latest",
@@ -76,4 +78,9 @@ func TestContainerMetricsTagging(t *testing.T) {
 			}
 		}
 	}
+
+	// redis:3.2 runs one process with 3 threads
+	sender.AssertCalled(t, "Gauge", "docker.thread.count", 3.0, "", mocksender.MatchTagsContains(expectedTags))
+	sender.AssertCalled(t, "Gauge", "docker.thread.limit", 25.0, "", mocksender.MatchTagsContains(expectedTags))
+
 }

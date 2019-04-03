@@ -15,6 +15,14 @@ from .dogstatsd import DOGSTATSD_TAG
 
 
 @task
+def test(ctx):
+    """
+    Run docker tests
+    """
+    ctx.run("python ./Dockerfiles/agent/secrets-helper/test_readsecret.py")
+
+
+@task
 def integration_tests(ctx, skip_image_build=False, skip_build=False):
     """
     Run docker integration tests
@@ -113,10 +121,60 @@ def mirror_image(ctx, src_image, dst_image="datadog/docker-library", dst_tag="au
         dst_tag = "_".join(match.groups()).replace(".", "_")
 
     dst = "{}:{}".format(dst_image, dst_tag)
-    print("Uploading {} to {}".format(src_image, dst))
+    publish(src_image, dst)
 
-    # TODO: use docker python lib
-    ctx.run("docker pull {src} && docker tag {src} {dst} && docker push {dst}".format(
-        src=src_image,
-        dst=dst)
+
+@task
+def publish(ctx, src, dst, signed_pull=False, signed_push=False):
+    print("Uploading {} to {}".format(src, dst))
+
+    pull_env = {}
+    if signed_pull:
+        pull_env["DOCKER_CONTENT_TRUST"] = "1"
+    ctx.run(
+        "docker pull {src} && docker tag {src} {dst}".format(src=src, dst=dst),
+        env=pull_env
     )
+
+    push_env = {}
+    if signed_push:
+        push_env["DOCKER_CONTENT_TRUST"] = "1"
+    ctx.run(
+        "docker push {dst}".format(dst=dst),
+        env=push_env
+    )
+
+@task
+def pull_base_images(ctx, dockerfile, signed_pull=True):
+    """
+    Pulls the base images for a given Dockerfile, with
+    content trust enabled by default, to ensure the base
+    images are signed
+    """
+    images = set()
+    stages = set()
+
+    with open(dockerfile, "r") as f:
+        for line in f:
+            words = line.split()
+            # Get source images
+            if len(words) < 2 or words[0].lower() != "from":
+                continue
+            images.add(words[1])
+            # Get stage names to remove them from pull
+            if len(words) < 4 or words[2].lower() != "as":
+                continue
+            stages.add(words[3])
+
+    if stages:
+        print("Ignoring intermediate stage names: {}".format(", ".join(stages)))
+        images -= stages
+
+    print("Pulling following base images: {}".format(", ".join(images)))
+
+    pull_env = {}
+    if signed_pull:
+        pull_env["DOCKER_CONTENT_TRUST"] = "1"
+
+    for i in images:
+        ctx.run("docker pull {}".format(i), env=pull_env)

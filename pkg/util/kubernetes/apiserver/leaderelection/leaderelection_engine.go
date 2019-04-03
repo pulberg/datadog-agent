@@ -1,5 +1,7 @@
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build kubeapiserver
 
@@ -7,9 +9,7 @@ package leaderelection
 
 import (
 	"encoding/json"
-	"time"
 
-	"github.com/DataDog/datadog-agent/pkg/util/log"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,17 +17,19 @@ import (
 	ld "k8s.io/client-go/tools/leaderelection"
 	rl "k8s.io/client-go/tools/leaderelection/resourcelock"
 	"k8s.io/client-go/tools/record"
+
+	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
-func (le *LeaderEngine) getCurrentLeader(electionId, namespace string) (string, *v1.ConfigMap, error) {
-	configMap, err := le.coreClient.ConfigMaps(namespace).Get(electionId, metav1.GetOptions{})
+func (le *LeaderEngine) getCurrentLeader() (string, *v1.ConfigMap, error) {
+	configMap, err := le.coreClient.ConfigMaps(le.LeaderNamespace).Get(le.LeaseName, metav1.GetOptions{})
 	if err != nil {
 		return "", nil, err
 	}
 
 	val, found := configMap.Annotations[rl.LeaderElectionRecordAnnotationKey]
 	if !found {
-		log.Debugf("The configmap/%s in the namespace %s doesn't have the annotation %q: no one is leading yet", electionId, namespace, rl.LeaderElectionRecordAnnotationKey)
+		log.Debugf("The configmap/%s in the namespace %s doesn't have the annotation %q: no one is leading yet", le.LeaseName, le.LeaderNamespace, rl.LeaderElectionRecordAnnotationKey)
 		return "", configMap, nil
 	}
 
@@ -40,21 +42,21 @@ func (le *LeaderEngine) getCurrentLeader(electionId, namespace string) (string, 
 
 // newElection creates an election.
 // If `namespace`/`election` does not exist, it is created.
-func (le *LeaderEngine) newElection(electionId, namespace string, ttl time.Duration) (*ld.LeaderElector, error) {
+func (le *LeaderEngine) newElection() (*ld.LeaderElector, error) {
 	// We first want to check if the ConfigMap the Leader Election is based on exists.
-	_, err := le.coreClient.ConfigMaps(namespace).Get(electionId, metav1.GetOptions{})
+	_, err := le.coreClient.ConfigMaps(le.LeaderNamespace).Get(le.LeaseName, metav1.GetOptions{})
 
 	if err != nil {
 		if errors.IsNotFound(err) == false {
 			return nil, err
 		}
 
-		_, err = le.coreClient.ConfigMaps(namespace).Create(&v1.ConfigMap{
+		_, err = le.coreClient.ConfigMaps(le.LeaderNamespace).Create(&v1.ConfigMap{
 			TypeMeta: metav1.TypeMeta{
 				Kind: "ConfigMap",
 			},
 			ObjectMeta: metav1.ObjectMeta{
-				Name: electionId,
+				Name: le.LeaseName,
 			},
 		})
 		if err != nil && !errors.IsConflict(err) {
@@ -62,28 +64,34 @@ func (le *LeaderEngine) newElection(electionId, namespace string, ttl time.Durat
 		}
 	}
 
-	currentLeader, configMap, err := le.getCurrentLeader(electionId, namespace)
+	currentLeader, configMap, err := le.getCurrentLeader()
 	if err != nil {
 		return nil, err
 	}
 	log.Debugf("Current registered leader is %q, building leader elector %q as candidate", currentLeader, le.HolderIdentity)
-
 	callbacks := ld.LeaderCallbacks{
 		OnNewLeader: func(identity string) {
-			le.currentHolderMutex.Lock()
-			le.currentHolderIdentity = identity
-			le.currentHolderMutex.Unlock()
-			log.Infof("Currently new leader %q", identity)
+			le.leaderIdentityMutex.Lock()
+			le.leaderIdentity = identity
+			le.leaderIdentityMutex.Unlock()
+
+			log.Infof("New leader %q", identity)
 		},
 		OnStartedLeading: func(stop <-chan struct{}) {
-			log.Infof("Leading as %q ...", le.HolderIdentity)
+			le.leaderIdentityMutex.Lock()
+			le.leaderIdentity = le.HolderIdentity
+			le.leaderIdentityMutex.Unlock()
+
+			log.Infof("Started leading as %q...", le.HolderIdentity)
 		},
-		// OnStoppedLeading shouldn't be called unless the election is lost
+		// OnStoppedLeading shouldn't be called unless the election is lost. This could happen if
+		// we lose connection to the apiserver for the duration of the lease.
 		OnStoppedLeading: func() {
-			le.currentHolderMutex.Lock()
-			le.currentHolderIdentity = ""
-			le.currentHolderMutex.Unlock()
-			log.Warnf("Stop leading %q", le.HolderIdentity)
+			le.leaderIdentityMutex.Lock()
+			le.leaderIdentity = ""
+			le.leaderIdentityMutex.Unlock()
+
+			log.Infof("Stopped leading %q", le.HolderIdentity)
 		},
 	}
 
@@ -110,9 +118,9 @@ func (le *LeaderEngine) newElection(electionId, namespace string, ttl time.Durat
 
 	electionConfig := ld.LeaderElectionConfig{
 		Lock:          leaderElectorInterface,
-		LeaseDuration: ttl,
-		RenewDeadline: ttl / 2,
-		RetryPeriod:   ttl / 4,
+		LeaseDuration: le.LeaseDuration,
+		RenewDeadline: le.LeaseDuration / 2,
+		RetryPeriod:   le.LeaseDuration / 4,
 		Callbacks:     callbacks,
 	}
 	return ld.NewLeaderElector(electionConfig)

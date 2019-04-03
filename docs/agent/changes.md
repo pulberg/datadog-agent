@@ -92,25 +92,28 @@ To not miss some specific configuration details, if you are currently using envi
 
 #### Proxies
 
-The agent proxy settings can be overridden with the standard `*_PROXY`
+Starting with v6.4.0, the agent proxy settings can be overridden with the following
 environment variables:
 
-- `HTTP_PROXY`: an http URL to use as a proxy for `http` requests.
-- `HTTPS_PROXY`: an http URL to use as a proxy for `https` requests.
-- `NO_PROXY`: a comma-separated list of URLs for which no proxy should be used.
+- `DD_PROXY_HTTP`: an http URL to use as a proxy for `http` requests.
+- `DD_PROXY_HTTPS`: an http URL to use as a proxy for `https` requests.
+- `DD_PROXY_NO_PROXY`: a space-separated list of URLs for which no proxy should be used.
 
-Notice: these variables don't use the `DD_` prefix.
+The standard environment variables `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` are
+supported in both the Agent 5 and the Agent 6. However, with the Agent 6, using the new
+`DD_PROXY_*` environment variables listed above is recommended, and they have precedence over
+the standard environment variables.
 
-**The behaviour of the Agent 6 is different from Agent 5**:
+**The precedence order of the Agent 6 proxy options is different from Agent 5**:
 
-The Agent 6 will first use the environment variables and the configuration file
+The Agent 6 will first use the environment variables and then the configuration file
 (as for every other setting available through environment variables). This is
 the opposite of Agent 5, which would always use the proxy from the configuration
 file if set.
 
 For proxies, the Agent 6 will override the values from the configuration file
-with the ones in the environment. This means that if both a `HTTP` and `HTTPS`
-proxy are set in the configuration file but only the `HTTPS_PROXY` is set in
+with the ones in the environment. This means that if both `proxy.http` and `proxy.https`
+are set in the configuration file but only `DD_PROXY_HTTPS` is set in
 the environment, the agent will use the `HTTPS` value from the environment and
 the `HTTP` value from the configuration file.
 
@@ -188,18 +191,18 @@ If the `service` wrapper command is not available on your system, use:
 
 If you're unsure which init system your distribution uses by default, please refer to the table below:
 
-| distribution \ init system | `upstart` | `systemd` | Notes |
-| -------------------------- |:---------:|:---------:| ----- |
-| Amazon Linux (<= 2017.09) | ✅ |  |  |
-| Amazon Linux 2 (>= 2017.12) |  | ✅ |  |
-| CentOS/RHEL 6 | ✅ |  |  |
-| CentOS/RHEL 7 |  | ✅ |  |
-| Debian 7 (wheezy) |  |  | _currently unsupported unless you install systemd_ |
-| Debian 8 (jessie) & 9 (stretch) |  | ✅ |  |
-| SUSE 11 |  |  | _currently unsupported unless you install systemd_ |
-| SUSE 12 |  | ✅ |  |
-| Ubuntu < 15.04 | ✅ | |  |
-| Ubuntu >= 15.04 |  | ✅ |  |
+| distribution \ init system | `upstart` | `systemd` | `sysvinit` | Notes |
+| -------------------------- |:---------:|:---------:|:----------:|----- |
+| Amazon Linux (<= 2017.09) | ✅ |  |  |  |
+| Amazon Linux 2 (>= 2017.12) |  | ✅ |  |  |
+| CentOS/RHEL 6 | ✅ |  |  |  |
+| CentOS/RHEL 7 |  | ✅ |  |  |
+| Debian 7 (wheezy) |  |  | ✅ (agent >= 6.6.0) | |
+| Debian 8 (jessie) & 9 (stretch) |  | ✅ |  |  |
+| SUSE 11 |  |  |  | _currently unsupported unless you install systemd_ |
+| SUSE 12 |  | ✅ |  |  |
+| Ubuntu < 15.04 | ✅ | |  |  |
+| Ubuntu >= 15.04 |  | ✅ |  |  |
 
 #### Agent commands
 
@@ -270,7 +273,7 @@ apm_config:
 For the Docker image, the APM agent is disabled by default. You can enable it by setting
 the `DD_APM_ENABLED` envvar to `true`. It will listen to all interfaces by default.
 
-If you want to listen to non-local trafic on any other platform, you can set
+If you want to listen to non-local traffic on any other platform, you can set
 `apm_config.apm_non_local_traffic = true` in your `datadog.yaml`.
 
 ## Process agent
@@ -292,6 +295,8 @@ The `enabled` value is a string with the following options:
 
 ## Docker check
 
+Docker versions 1.12.1 and up are supported.
+
 The Docker check has been rewritten in Go to take advantage of the new
 internal architecture of the Agent, mainly bringing a consistent behaviour
 across every container related component. Therefore the Python version will
@@ -311,7 +316,7 @@ are ported, excepted the following deprecations:
   * `collect_labels_as_tags` has been renamed `docker_labels_as_tags` and now
     supports high cardinality tags, see the details in `datadog.yaml.example`
   * `exclude` and `include` lists have been renamed `ac_include` and
-    `ac_exclude`. In order to make filtering consistent accross all components of
+    `ac_exclude`. In order to make filtering consistent across all components of
     the agent, we had to drop filtering on arbitrary tags. The only supported
     filtering tags are `image` (image name) and `name` (container name).
     Regexp filtering is still available, see `datadog.yaml.example` for examples
@@ -329,7 +334,7 @@ needed settings from `docker_daemon.yaml` to `datadog.yaml`.
 
 ### Kubernetes versions
 
-Agent 6 currently supports Kubernetes versions 1.7.6 and above. Support for previous versions will be added in a future release.
+Agent 6 currently supports Kubernetes versions 1.3 and above.
 
 ### Kubernetes metrics and events
 
@@ -370,7 +375,7 @@ All documented use cases are supported, please contact our support team if you r
 
 ### Kubernetes
 
-When using Kubernetes, the Autodiscovery system now sources information from the kubelet, instead of the Docker daemon. This will allow AD to work without access to the Docker socket, and enable a more consistent experience accross all parts of the agent. Also, the default behaviour is to source AD templates from pod annotations. You can enable the `docker` config-provider to use container labels, and replace the `kubelet` listener by the `kubelet` one if you need AD on containers running out of pods.
+When using Kubernetes, the Autodiscovery system now sources information from the kubelet, instead of the Docker daemon. This will allow AD to work without access to the Docker socket, and enable a more consistent experience across all parts of the agent. Also, the default behaviour is to source AD templates from pod annotations. You can enable the `docker` config-provider to use container labels, and replace the `kubelet` listener by the `kubelet` one if you need AD on containers running out of pods.
 
 When specifying AD templates in pod annotations, the new annotation name prefix is `ad.datadoghq.com/`. the previous annotation prefix
 `service-discovery.datadoghq.com/` is still supported for Agent6 but support will be removed in Agent7.

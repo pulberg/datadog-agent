@@ -1,24 +1,18 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package system
 
 import (
-	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
+	"github.com/DataDog/datadog-agent/pkg/aggregator"
 	"github.com/DataDog/datadog-agent/pkg/collector/check"
 	core "github.com/DataDog/datadog-agent/pkg/collector/corechecks"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
-	"github.com/shirou/gopsutil/host"
-
-	"github.com/DataDog/datadog-agent/pkg/aggregator"
 )
 
 const uptimeCheckName = "uptime"
-
-// For testing purpose
-var uptime = host.Uptime
 
 // UptimeCheck doesn't need additional fields
 type UptimeCheck struct {
@@ -41,12 +35,6 @@ func (c *UptimeCheck) Run() error {
 	sender.Gauge("system.uptime", float64(t), "", nil)
 	sender.Commit()
 
-	return nil
-}
-
-// Configure the CPU check doesn't need configuration
-func (c *UptimeCheck) Configure(data integration.Data, initConfig integration.Data) error {
-	// do nothing
 	return nil
 }
 

@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package forwarder
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptrace"
 	"time"
 
 	"github.com/DataDog/datadog-agent/pkg/util/log"
@@ -101,7 +102,7 @@ func (w *Worker) Start() {
 // worker.
 func (w *Worker) callProcess(t Transaction) error {
 	ctx, cancel := context.WithCancel(context.Background())
-
+	ctx = httptrace.WithClientTrace(ctx, trace)
 	done := make(chan interface{})
 	go func() {
 		w.process(ctx, t)

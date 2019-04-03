@@ -1,35 +1,44 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package listeners
 
 import (
 	"errors"
 
+	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
 // ID is the representation of the unique ID of a Service
 type ID string
 
+// ContainerPort represents a network port in a Service.
+type ContainerPort struct {
+	Port int
+	Name string
+}
+
 // Service represents an application we can run a check against.
 // It should be matched with a check template by the ConfigResolver using the
 // ADIdentifiers field.
 type Service interface {
-	GetID() ID                            // unique ID
-	GetADIdentifiers() ([]string, error)  // identifiers on which templates will be matched
-	GetHosts() (map[string]string, error) // network --> IP address
-	GetPorts() ([]int, error)             // network ports
-	GetTags() ([]string, error)           // tags
-	GetPid() (int, error)                 // process identifier
+	GetEntity() string                         // unique entity name
+	GetADIdentifiers() ([]string, error)       // identifiers on which templates will be matched
+	GetHosts() (map[string]string, error)      // network --> IP address
+	GetPorts() ([]ContainerPort, error)        // network ports
+	GetTags() ([]string, error)                // tags
+	GetPid() (int, error)                      // process identifier
+	GetHostname() (string, error)              // hostname.domainname for the entity
+	GetCreationTime() integration.CreationTime // created before or after the agent start
 }
 
 // ServiceListener monitors running services and triggers check (un)scheduling
 //
 // It holds a cache of running services, listens to new/killed services and
-// updates its cache, and the ConfigResolver with these events.
+// updates its cache, and the AutoConfig with these events.
 type ServiceListener interface {
 	Listen(newSvc, delSvc chan<- Service)
 	Stop()

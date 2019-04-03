@@ -31,7 +31,7 @@ To start working on the Cluster Agent, you can build the `master` branch:
 2. cd into the project folder: `cd $GOPATH/src/github.com/DataDog/datadog-agent`.
 3. install project's dependencies: `invoke deps`.
    Make sure that `$GOPATH/bin` is in your `$PATH` otherwise this step might fail.
-4. build the whole project with `invoke cluster-agent.build --build-exclude=snmp`
+4. build the whole project with `invoke cluster-agent.build`
 
 Please refer to the [Agent Developer Guide](docs/dev/README.md) for more details.
 
@@ -51,7 +51,7 @@ DD_API_KEY=12345678990 ./bin/datadog-cluster-agent/datadog-cluster-agent
 Once built, you can use the `start` command and the DCA will also try to connect to the API Server.
 If successful, it will forward the events from the API Server to your Datadog app and a health check for each component of the control pane.
 
-Secondly, it will start serving the `DD_CLUSTER_AGENT_CMD_PORT` if set or 5005 by default with the following endpoints:
+Secondly, it will start serving the `DD_CLUSTER_AGENT.CMD_PORT` if set or 5005 by default with the following endpoints:
 
 ```
 - /hostname

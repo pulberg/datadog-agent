@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package forwarder
 
@@ -20,15 +20,17 @@ import (
 )
 
 var (
-	monoKeysDomains = map[string][]string{
-		"datadog.foo": {"monokey"},
+	testDomain           = "http://app.datadoghq.com"
+	testVersionDomain, _ = config.AddAgentVersionToDomain(testDomain, "app")
+	monoKeysDomains      = map[string][]string{
+		testVersionDomain: {"monokey"},
 	}
 	keysPerDomains = map[string][]string{
-		"datadog.foo": {"api-key-1", "api-key-2"},
+		testDomain:    {"api-key-1", "api-key-2"},
 		"datadog.bar": nil,
 	}
 	validKeysPerDomain = map[string][]string{
-		"datadog.foo": {"api-key-1", "api-key-2"},
+		testVersionDomain: {"api-key-1", "api-key-2"},
 	}
 )
 
@@ -95,10 +97,10 @@ func TestCreateHTTPTransactions(t *testing.T) {
 
 	transactions := forwarder.createHTTPTransactions(endpoint, payloads, false, headers)
 	require.Len(t, transactions, 4)
-	assert.Equal(t, "datadog.foo", transactions[0].Domain)
-	assert.Equal(t, "datadog.foo", transactions[1].Domain)
-	assert.Equal(t, "datadog.foo", transactions[2].Domain)
-	assert.Equal(t, "datadog.foo", transactions[3].Domain)
+	assert.Equal(t, testVersionDomain, transactions[0].Domain)
+	assert.Equal(t, testVersionDomain, transactions[1].Domain)
+	assert.Equal(t, testVersionDomain, transactions[2].Domain)
+	assert.Equal(t, testVersionDomain, transactions[3].Domain)
 	assert.Equal(t, endpoint, transactions[0].Endpoint)
 	assert.Equal(t, endpoint, transactions[1].Endpoint)
 	assert.Equal(t, endpoint, transactions[2].Endpoint)
@@ -147,7 +149,7 @@ func TestSubmitV1Intake(t *testing.T) {
 	// DefaultForwarder correctly create HTTPTransaction, set the headers
 	// and send them to the correct domainForwarder.
 	inputQueue := make(chan Transaction, 1)
-	df := forwarder.domainForwarders["datadog.foo"]
+	df := forwarder.domainForwarders[testVersionDomain]
 	bk := df.highPrio
 	df.highPrio = inputQueue
 	defer func() { df.highPrio = bk }()
@@ -170,16 +172,17 @@ func TestSubmitV1Intake(t *testing.T) {
 // per component.
 func TestForwarderEndtoEnd(t *testing.T) {
 	// reseting DroppedOnInput
-	droppedOnInput.Set(0)
+	transactionsDroppedOnInput.Set(0)
 
 	requests := int64(0)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(&requests, 1)
 		w.WriteHeader(http.StatusOK)
 	}))
-	ddURL := config.Datadog.Get("dd_url")
-	config.Datadog.Set("dd_url", ts.URL)
-	defer config.Datadog.Set("dd_url", ddURL)
+	mockConfig := config.Mock()
+	ddURL := mockConfig.Get("dd_url")
+	mockConfig.Set("dd_url", ts.URL)
+	defer mockConfig.Set("dd_url", ddURL)
 
 	f := NewDefaultForwarder(map[string][]string{
 		ts.URL:     {"api_key1", "api_key2"},

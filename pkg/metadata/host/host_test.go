@@ -1,7 +1,8 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
+// +build !windows
 
 package host
 
@@ -9,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/metadata/host/container"
 	"github.com/DataDog/datadog-agent/pkg/util/cache"
 	"github.com/shirou/gopsutil/cpu"
@@ -38,10 +38,10 @@ func TestGetSystemStats(t *testing.T) {
 }
 
 func TestGetPythonVersion(t *testing.T) {
-	require.Equal(t, "n/a", getPythonVersion())
+	require.Equal(t, "n/a", GetPythonVersion())
 	key := cache.BuildAgentKey("pythonVersion")
 	cache.Cache.Set(key, "Python 2.8", cache.NoExpiration)
-	require.Equal(t, "Python 2.8", getPythonVersion())
+	require.Equal(t, "Python 2.8", GetPythonVersion())
 }
 
 func TestGetCPUInfo(t *testing.T) {
@@ -67,22 +67,6 @@ func TestGetMeta(t *testing.T) {
 	assert.NotEmpty(t, meta.SocketHostname)
 	assert.NotEmpty(t, meta.Timezones)
 	assert.NotEmpty(t, meta.SocketFqdn)
-}
-
-func TestGetHostTags(t *testing.T) {
-	config.Datadog.Set("tags", []string{"tag1:value1", "tag2", "tag3"})
-	defer config.Datadog.Set("tags", nil)
-
-	hostTags := getHostTags()
-	assert.NotNil(t, hostTags.System)
-	assert.Equal(t, hostTags.System, []string{"tag1:value1", "tag2", "tag3"})
-}
-
-func TestGetEmptyHostTags(t *testing.T) {
-	// getHostTags should never return a nil value under System even when there are no host tags
-	hostTags := getHostTags()
-	assert.NotNil(t, hostTags.System)
-	assert.Equal(t, hostTags.System, []string{})
 }
 
 func TestBuildKey(t *testing.T) {

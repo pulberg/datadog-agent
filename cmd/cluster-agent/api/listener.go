@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 /*
 Package api implements the agent IPC api. Using HTTP
@@ -19,5 +19,5 @@ import (
 
 // getListener returns a listening connection
 func getListener() (net.Listener, error) {
-	return net.Listen("tcp", fmt.Sprintf("0.0.0.0:%v", config.Datadog.GetInt("cluster_agent_cmd_port")))
+	return net.Listen("tcp", fmt.Sprintf("0.0.0.0:%v", config.Datadog.GetInt("cluster_agent.cmd_port")))
 }

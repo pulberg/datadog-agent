@@ -1,29 +1,75 @@
 # Setting up your development environment
 
-## Invoke
+## Python
 
-[Invoke](http://www.pyinvoke.org/installing.html) is a task runner written in
-Python that is extensively used in this project to orchestrate builds and test
+The Agent embeds a full-fledged CPython interpreter so it requires the development
+files to be available in the dev env.
+
+If you're on OSX/macOS, installing Python 2.7 with [Homebrew](https://brew.sh) will
+bring along all the development files needed:
+```
+brew install python@2
+```
+
+On Linux, depending on the distribution, you might need to explicitly install
+the development files, for example on Ubuntu:
+```
+sudo apt-get install python2.7-dev
+```
+
+On Windows, install Python 2.7 via the [official installer](https://www.python.org/downloads/).
+
+### Additional Windows Tools
+You will also need the Visual Studio for [Visual Studio for Python installer](http://aka.ms/vcpython27)
+
+Download the [gcc toolchain](http://win-builds.org/). 
+- From the graphical package manager, select and install the needed libraries, leave the default (select all) if you're unsure.  
+- Make sure to select x86_64. 
+- Add installation folder to the %PATH%.
+
+
+## Invoke + Python Dependencies
+
+[Invoke](http://www.pyinvoke.org/) is a task runner written in Python
+that is extensively used in this project to orchestrate builds and test
 runs.
 
-The easiest way to install it on any supported platform is using `pip`:
-```
-pip install invoke
+Though you may install invoke in a variety of way we suggest you use
+the provided [requirements](https://github.com/DataDog/datadog-agent/blob/master/requirements.txt)
+file and `pip`:
+
+```bash
+pip install -r requirements.txt
 ```
 
-OSX users can install it via [Homebrew](https://brew.sh) with:
-```
-brew install invoke
-```
+This procedure ensures you not only get the correct version of invoke, but
+also any additional python dependencies our development workflow may require,
+at their expected versions.
+It will also pull other handy development tools/deps (reno, or docker).
 
 Tasks are usually parameterized and Invoke comes with some default values that
 are used in the official build. Such values are listed in the `invoke.yaml`
 file at the root of this repo and can be overridden by setting `INVOKE_*` env
 variables (see Invoke docs for more details).
 
+
+### Note
+
+We don't want to pollute your system-wide python installation, so a python 2.7 virtual
+environment is recommended (though optional). It will help keep an isolated development
+environment and ensure a clean system python.
+
+- Install the virtualenv module:
+```pip install virtualenv```
+- Create the virtual environment:
+```virtualenv $GOPATH/src/github.com/DataDog/datadog-agent/venv```
+- Enable the virtual environment:
+```source $GOPATH/src/github.com/DataDog/datadog-agent/venv/bin/activate```
+
+
 ## Golang
 
-You must install [go](https://golang.org/doc/install) version 1.9.2 or above. Make
+You must install [go](https://golang.org/doc/install) version 1.11.5 or above. Make
 sure that `$GOPATH/bin` is in your `$PATH` otherwise Invoke cannot use any
 additional tool it might need.
 
@@ -32,13 +78,13 @@ additional tool it might need.
 From the root of `datadog-agent`, run `invoke deps`. This will:
 
 - Use `go` to install the necessary dependencies
-- Use `git` to clone [integrations-core](integrations-core)
-- Use `pip` to install [datadog_checks_base](datadog_checks_base)
+- Use `git` to clone [integrations-core][integrations-core]
+- Use `pip` to install [datadog_checks_base][datadog_checks_base]
 
-If you already installed [datadog_checks_base](datadog_checks_base) in your desired
+If you already installed [datadog_checks_base][datadog_checks_base] in your desired
 Python, you can do `invoke deps --no-checks` to prevent cloning and pip install. If
-you are already doing development on [integrations-core](integrations-core), you
-can specify a path to [integrations-core](integrations-core) using the `--core-dir`
+you are already doing development on [integrations-core][integrations-core], you
+can specify a path to [integrations-core][integrations-core] using the `--core-dir`
 option or `DD_CORE_DIR` environment variable to omit just the cloning step.
 
 ## System or Embedded?
@@ -86,56 +132,18 @@ boolean flag value to _false_, either exporting the env var `INVOKE_USE_SYSTEM_L
 changing the `invoke.yaml` file or passing the corresponding arg to the build and
 test tasks, like `invoke build --use-system-libs=false`.
 
-### Python
-
-The Agent embeds a full-fledged CPython interpreter so it requires the development
-files to be available in the dev env.
-
-If you're on OSX/macOS, installing Python 2.7 with [Homebrew](https://brew.sh) will
-bring along all the development files needed:
-```
-brew install python@2
-```
-
-On Windows, the [official installer](https://www.python.org/downloads/) will
-provide all the files needed.
-
-On Linux, depending on the distribution, you might need to explicitly install
-the development files, for example on Ubuntu:
-```
-sudo apt-get install python2.7-dev
-```
-
-### SNMP (Simple Network Management Protocol)
-
-The new SNMP check is written in Go, so the Agent must be built against few
-libraries.
-
-On OSX/macOS with [Homebrew](https://brew.sh):
-```
-brew install net-snmp
-```
-
-On Windows TODO
-
-On Ubuntu:
-```
-sudo apt-get install libsnmp-base libsnmp-dev snmp-mibs-downloader
-```
-
-**Please note:** the package `snmp-mibs-downloader` is only available in the
-`multiverse` Ubuntu repo and in `non-free` Debian repo. If you don't really
-need to work/debug on the SNMP integration, you could just build the agent without
-it (see [Building the Agent][building] for how to do it) and avoid the dependencies
-setup efforts altogether.
-
 ### Systemd
 
 The agent is able to collect systemd journal logs using a wrapper on the systemd utility library.
 
-On Linux:
+On Ubuntu/Debian:
 ```
 sudo apt-get install libsystemd-dev
+```
+
+On Redhat/CentOS:
+```
+sudo yum install systemd-devel
 ```
 
 ## Docker

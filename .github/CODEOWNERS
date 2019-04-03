@@ -9,32 +9,44 @@
 # Rules are matched bottom-to-top, so one team can own subdirectories
 # and another the rest of the directory.
 
-/cmd/                                   @DataDog/croissant
-/omnibus/                               @DataDog/croissant
-/pkg/                                   @DataDog/croissant
-/pkg/aggregator/                        @DataDog/croissant
-/pkg/collector/                         @DataDog/croissant
-/pkg/forwarder/                         @DataDog/croissant
-/pkg/metadata/                          @DataDog/croissant
-/pkg/metrics/                           @DataDog/croissant
-/pkg/serializer/                        @DataDog/croissant
-/pkg/status/                            @DataDog/croissant
-/pkg/version/                           @DataDog/croissant
+/cmd/                                   @DataDog/agent-core
+/cmd/trace-agent/                       @DataDog/apm-agent
+/cmd/agent/app/integrations*.go         @DataDog/prodsec @DataDog/agent-integrations @DataDog/agent-core
+/cmd/cluster-agent/                     @DataDog/container-integrations
 
-/Dockerfiles/                           @DataDog/kenafeh
-/pkg/autodiscovery/                     @DataDog/kenafeh @DataDog/croissant
-/pkg/autodiscovery/listeners/           @DataDog/kenafeh
-/pkg/collector/corechecks/containers/   @DataDog/kenafeh
-/pkg/collector/corechecks/cluster/      @DataDog/kenafeh
-/pkg/tagger/                            @DataDog/kenafeh
-/pkg/util/docker/                       @DataDog/kenafeh @DataDog/burrito
-/pkg/util/ecs/                          @DataDog/kenafeh @DataDog/burrito
-/pkg/util/kubernetes/                   @DataDog/kenafeh @DataDog/burrito
-/pkg/util/retry/                        @DataDog/kenafeh
+/docs/                                  @DataDog/baklava @DataDog/agent-core
 
-/pkg/logs/                              @DataDog/ramen-intake
-
-/pkg/metrics/percentile/                @DataDog/sandwich
-
+/pkg/                                   @DataDog/agent-core
+/pkg/aggregator/                        @DataDog/agent-core
+/pkg/collector/                         @DataDog/agent-core
+/pkg/forwarder/                         @DataDog/agent-core
+/pkg/metadata/                          @DataDog/agent-core
+/pkg/metrics/                           @DataDog/agent-core
+/pkg/serializer/                        @DataDog/agent-core
+/pkg/status/                            @DataDog/agent-core
+/pkg/version/                           @DataDog/agent-core
+/pkg/trace/                             @DataDog/apm-agent
+/pkg/autodiscovery/                     @DataDog/container-integrations @DataDog/agent-core
+/pkg/autodiscovery/listeners/           @DataDog/container-integrations
+/pkg/clusteragent/                      @DataDog/container-integrations
+/pkg/collector/corechecks/cluster/      @DataDog/container-integrations
+/pkg/collector/corechecks/containers/   @DataDog/container-integrations
+/pkg/tagger/                            @DataDog/container-integrations
+/pkg/util/clusteragent/                 @DataDog/container-integrations
+/pkg/util/containers/                   @DataDog/container-integrations
+/pkg/util/docker/                       @DataDog/container-integrations @DataDog/burrito
+/pkg/util/ecs/                          @DataDog/container-integrations @DataDog/burrito
+/pkg/util/kubernetes/                   @DataDog/container-integrations @DataDog/burrito
+/pkg/util/retry/                        @DataDog/container-integrations
+/pkg/logs/                              @DataDog/logs-intake
 /pkg/metadata/ecs/                      @DataDog/burrito
 /pkg/metadata/kubernetes/               @DataDog/burrito
+/pkg/procmatch/                         @DataDog/burrito
+/pkg/quantile                           @DataDog/metrics-aggregation
+
+/Dockerfiles/                           @DataDog/container-integrations
+/docs/trace-agent                       @DataDog/apm-agent
+/omnibus/                               @DataDog/agent-core
+/tasks/trace.py                         @DataDog/apm-agent
+
+/Makefile.trace                         @DataDog/apm-agent

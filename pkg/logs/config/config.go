@@ -1,52 +1,56 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package config
 
 import (
-	"fmt"
-	"github.com/DataDog/datadog-agent/pkg/config"
+	"encoding/json"
+
+	coreConfig "github.com/DataDog/datadog-agent/pkg/config"
 )
 
-// LogsAgent is the global configuration object
-var LogsAgent = config.Datadog
+// ContainerCollectAll is the name of the docker integration that collect logs from all containers
+const ContainerCollectAll = "container_collect_all"
 
-// Build returns logs-agent sources
-func Build() (*LogSources, error) {
-	sources, err := buildLogSources(LogsAgent.GetString("confd_path"), LogsAgent.GetBool("logs_config.container_collect_all"))
-	if err != nil {
-		return nil, err
-	}
-	return sources, nil
-}
-
-// buildLogSources returns all the logs sources computed from logs configuration files and environment variables
-func buildLogSources(ddconfdPath string, collectAllLogsFromContainers bool) (*LogSources, error) {
+// DefaultSources returns the default log sources that can be directly set from the datadog.yaml or through environment variables.
+func DefaultSources() []*LogSource {
 	var sources []*LogSource
 
-	// append sources from all logs config files
-	fileSources := buildLogSourcesFromDirectory(ddconfdPath)
-	sources = append(sources, fileSources...)
-
-	if collectAllLogsFromContainers {
-		// append source to collect all logs from all containers,
-		// this source must be added to the end of the list
-		// to assure sources metadata are not overridden when already defined
-		containersSource := NewLogSource("container_collect_all", &LogsConfig{
+	if coreConfig.Datadog.GetBool("logs_config.container_collect_all") {
+		// append a new source to collect all logs from all containers
+		source := NewLogSource(ContainerCollectAll, &LogsConfig{
 			Type:    DockerType,
 			Service: "docker",
 			Source:  "docker",
 		})
-		sources = append(sources, containersSource)
+		sources = append(sources, source)
 	}
 
-	logSources := &LogSources{sources}
+	return sources
+}
 
-	if len(logSources.GetValidSources()) == 0 {
-		return nil, fmt.Errorf("could not find any valid logs configuration")
+// GlobalProcessingRules returns the global processing rules to apply to all logs.
+func GlobalProcessingRules() ([]*ProcessingRule, error) {
+	var rules []*ProcessingRule
+	var err error
+	raw := coreConfig.Datadog.GetString("logs_config.processing_rules")
+	if raw != "" {
+		err = json.Unmarshal([]byte(raw), &rules)
+	} else {
+		err = coreConfig.Datadog.UnmarshalKey("logs_config.processing_rules", &rules)
 	}
-
-	return logSources, nil
+	if err != nil {
+		return nil, err
+	}
+	err = ValidateProcessingRules(rules)
+	if err != nil {
+		return nil, err
+	}
+	err = CompileProcessingRules(rules)
+	if err != nil {
+		return nil, err
+	}
+	return rules, nil
 }

@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package kubelet
 
@@ -44,4 +44,11 @@ func ParseMetricFromRaw(raw []byte, metric string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("%s metric not found in payload", metric)
+}
+
+// TrimRuntimeFromCID takes a full containerID with runtime prefix
+// and only returns the short cID, compatible with a docker container ID
+func TrimRuntimeFromCID(cid string) string {
+	parts := strings.SplitN(cid, "://", 2)
+	return parts[len(parts)-1]
 }

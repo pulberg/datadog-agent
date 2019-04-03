@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build docker
 
@@ -14,6 +14,8 @@ import (
 
 	"github.com/docker/docker/api/types/events"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/DataDog/datadog-agent/pkg/util/containers"
 )
 
 func TestProcessContainerEvent(t *testing.T) {
@@ -23,7 +25,7 @@ func TestProcessContainerEvent(t *testing.T) {
 	timestamp := time.Now().Truncate(10 * time.Millisecond)
 
 	// Container filter
-	filter, err := NewFilter([]string{},
+	filter, err := containers.NewFilter([]string{},
 		[]string{"name:excluded_name", "image:excluded_image"})
 
 	assert.Nil(err)

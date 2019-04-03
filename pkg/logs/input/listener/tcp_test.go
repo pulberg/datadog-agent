@@ -1,53 +1,67 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package listener
 
 import (
 	"fmt"
 	"net"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/DataDog/datadog-agent/pkg/logs/config"
 	"github.com/DataDog/datadog-agent/pkg/logs/message"
-	"github.com/DataDog/datadog-agent/pkg/logs/pipeline"
 	"github.com/DataDog/datadog-agent/pkg/logs/pipeline/mock"
-	"github.com/stretchr/testify/suite"
 )
 
-const tcpTestPort = 10512
+// use a randomly assigned port
+var tcpTestPort = 0
 
-type TCPTestSuite struct {
-	suite.Suite
+func TestTCPShouldReceivesMessages(t *testing.T) {
+	pp := mock.NewMockProvider()
+	msgChan := pp.NextPipelineChan()
+	listener := NewTCPListener(pp, config.NewLogSource("", &config.LogsConfig{Port: tcpTestPort}), 9000)
+	listener.Start()
 
-	outputChan chan message.Message
-	pp         pipeline.Provider
-	source     *config.LogSource
-	tcpl       *TCPListener
-}
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s", listener.listener.Addr()))
+	assert.Nil(t, err)
 
-func (suite *TCPTestSuite) SetupTest() {
-	suite.pp = mock.NewMockProvider()
-	suite.outputChan = suite.pp.NextPipelineChan()
-	suite.source = config.NewLogSource("", &config.LogsConfig{Type: config.TCPType, Port: tcpTestPort})
-	tcpl, err := NewTCPListener(suite.pp, suite.source)
-	suite.Nil(err)
-	suite.tcpl = tcpl
-	suite.tcpl.Start()
-}
+	var msg *message.Message
 
-func (suite *TCPTestSuite) TestTCPReceivesMessages() {
-	conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", tcpTestPort))
-	suite.Nil(err)
-
-	// should receive and decode message
 	fmt.Fprintf(conn, "hello world\n")
-	msg := <-suite.outputChan
-	suite.Equal("hello world", string(msg.Content()))
+	msg = <-msgChan
+	assert.Equal(t, "hello world", string(msg.Content))
+	assert.Equal(t, 1, len(listener.tailers))
+
+	listener.Stop()
 }
 
-func TestTCPTestSuite(t *testing.T) {
-	suite.Run(t, new(TCPTestSuite))
+func TestTCPDoesNotTruncateMessagesThatAreBiggerThanTheReadBufferSize(t *testing.T) {
+	pp := mock.NewMockProvider()
+	msgChan := pp.NextPipelineChan()
+	listener := NewTCPListener(pp, config.NewLogSource("", &config.LogsConfig{Port: tcpTestPort}), 100)
+	listener.Start()
+
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s", listener.listener.Addr()))
+	assert.Nil(t, err)
+
+	var msg *message.Message
+
+	fmt.Fprintf(conn, strings.Repeat("a", 80)+"\n")
+	msg = <-msgChan
+	assert.Equal(t, strings.Repeat("a", 80), string(msg.Content))
+
+	fmt.Fprintf(conn, strings.Repeat("a", 200)+"\n")
+	msg = <-msgChan
+	assert.Equal(t, strings.Repeat("a", 200), string(msg.Content))
+
+	fmt.Fprintf(conn, strings.Repeat("a", 70)+"\n")
+	msg = <-msgChan
+	assert.Equal(t, strings.Repeat("a", 70), string(msg.Content))
+
+	listener.Stop()
 }

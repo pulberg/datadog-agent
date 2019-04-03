@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // This module should be updated at every release
 
@@ -10,20 +10,13 @@ package version
 // AgentVersion contains the version of the Agent
 var AgentVersion string
 
-// DCAVersion contains the version of the Datatog Cluster Agent
-var DCAVersion string
-
 // Commit is populated with the short commit hash from which the Agent was built
 var Commit string
 
 var agentVersionDefault = "6.0.0"
-var clusterAgentVersionDefault = "1.0.0"
 
 func init() {
 	if AgentVersion == "" {
 		AgentVersion = agentVersionDefault
-	}
-	if DCAVersion == "" {
-		DCAVersion = clusterAgentVersionDefault
 	}
 }

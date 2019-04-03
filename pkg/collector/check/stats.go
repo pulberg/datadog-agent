@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package check
 
@@ -13,6 +13,7 @@ import (
 // Stats holds basic runtime statistics about check instances
 type Stats struct {
 	CheckName            string
+	CheckVersion         string
 	CheckID              ID
 	TotalRuns            uint64
 	TotalErrors          uint64
@@ -35,8 +36,9 @@ type Stats struct {
 // NewStats returns a new check stats instance
 func NewStats(c Check) *Stats {
 	return &Stats{
-		CheckID:   c.ID(),
-		CheckName: c.String(),
+		CheckID:      c.ID(),
+		CheckName:    c.String(),
+		CheckVersion: c.Version(),
 	}
 }
 

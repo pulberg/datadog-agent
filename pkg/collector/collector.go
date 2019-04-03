@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package collector
 
@@ -36,6 +36,9 @@ type Collector struct {
 func NewCollector(paths ...string) *Collector {
 	run := runner.NewRunner()
 	sched := scheduler.NewScheduler(run.GetChan())
+
+	// let the runner some visibility into the scheduler
+	run.SetScheduler(sched)
 	sched.Run()
 
 	c := &Collector{
@@ -52,6 +55,12 @@ func NewCollector(paths ...string) *Collector {
 		log.Infof("Embedding Python %s", pyVer)
 		log.Debugf("Python Home: %s", pyHome)
 		log.Debugf("Python path: %s", pyPath)
+	}
+
+	// Prepare python environment if necessary
+	err := pyPrepareEnv()
+	if err != nil {
+		log.Errorf("Unable to perform additional configuration of the python environment: %v", err)
 	}
 
 	log.Debug("Collector up and running!")
@@ -131,7 +140,7 @@ func (c *Collector) ReloadCheck(id check.ID, config, initConfig integration.Data
 	// unschedule the instance
 	err := c.scheduler.Cancel(id)
 	if err != nil {
-		return fmt.Errorf("an error occurred while cancelling the check schedule: %s", err)
+		return fmt.Errorf("an error occurred while canceling the check schedule: %s", err)
 	}
 
 	// stop the instance
@@ -166,10 +175,9 @@ func (c *Collector) StopCheck(id check.ID) error {
 	// unschedule the instance
 	err := c.scheduler.Cancel(id)
 	if err != nil {
-		return fmt.Errorf("an error occurred while cancelling the check schedule: %s", err)
+		return fmt.Errorf("an error occurred while canceling the check schedule: %s", err)
 	}
 
-	// stop the instance, this might time out
 	err = c.runner.StopCheck(id)
 	if err != nil {
 		return fmt.Errorf("an error occurred while stopping the check: %s", err)

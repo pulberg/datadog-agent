@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package listener
 
@@ -10,44 +10,30 @@ import (
 	"net"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/DataDog/datadog-agent/pkg/logs/config"
 	"github.com/DataDog/datadog-agent/pkg/logs/message"
-	"github.com/DataDog/datadog-agent/pkg/logs/pipeline"
 	"github.com/DataDog/datadog-agent/pkg/logs/pipeline/mock"
-	"github.com/stretchr/testify/suite"
 )
 
-const udpTestPort = 10513
+// use a randomly assigned port
+var udpTestPort = 0
 
-type UDPTestSuite struct {
-	suite.Suite
+func TestUDPShouldReceiveMessage(t *testing.T) {
+	pp := mock.NewMockProvider()
+	msgChan := pp.NextPipelineChan()
+	listener := NewUDPListener(pp, config.NewLogSource("", &config.LogsConfig{Port: udpTestPort}), 9000)
+	listener.Start()
 
-	outputChan chan message.Message
-	pp         pipeline.Provider
-	source     *config.LogSource
-	udpl       *UDPListener
-}
+	conn, err := net.Dial("udp", fmt.Sprintf("%s", listener.tailer.conn.LocalAddr()))
+	assert.Nil(t, err)
 
-func (suite *UDPTestSuite) SetupTest() {
-	suite.pp = mock.NewMockProvider()
-	suite.outputChan = suite.pp.NextPipelineChan()
-	suite.source = config.NewLogSource("", &config.LogsConfig{Type: config.UDPType, Port: udpTestPort})
-	udpl, err := NewUDPListener(suite.pp, suite.source)
-	suite.Nil(err)
-	suite.udpl = udpl
-	suite.udpl.Start()
-}
+	var msg *message.Message
 
-func (suite *UDPTestSuite) TestUDPReceivesMessages() {
-	conn, err := net.Dial("udp", fmt.Sprintf("localhost:%d", udpTestPort))
-	suite.Nil(err)
-
-	// should receive and decode message
 	fmt.Fprintf(conn, "hello world\n")
-	msg := <-suite.outputChan
-	suite.Equal("hello world", string(msg.Content()))
-}
+	msg = <-msgChan
+	assert.Equal(t, "hello world", string(msg.Content))
 
-func TestUDPTestSuite(t *testing.T) {
-	suite.Run(t, new(UDPTestSuite))
+	listener.Stop()
 }

@@ -8,21 +8,25 @@ from invoke import task
 # ALL_TAGS lists any available build tag
 ALL_TAGS = set([
     "apm",
+    "clusterchecks",
     "consul",
     "cpython",
+    "cri",
+    "containerd",
     "docker",
     "ec2",
     "etcd",
     "gce",
     "jmx",
+    "kubeapiserver",
     "kubelet",
     "log",
-    "systemd",
+    "netcgo", # Force the use of the CGO resolver. This will also have the effect of making the binary non-static
     "process",
-    "snmp",
+    "systemd",
     "zk",
     "zlib",
-    "kubeapiserver",
+    "secrets",
 ])
 
 # PUPPY_TAGS lists the tags needed when building the Puppy Agent
@@ -34,11 +38,22 @@ LINUX_ONLY_TAGS = [
     "docker",
     "kubelet",
     "kubeapiserver",
+    "cri",
+    "containerd",
+    "netcgo",
 ]
 
-DEBIAN_ONLY_TAGS = [
+REDHAT_AND_DEBIAN_ONLY_TAGS = [
     "systemd",
 ]
+
+REDHAT_AND_DEBIAN_DIST = [
+    'debian',
+    'ubuntu',
+    'centos',
+    'redhat'
+]
+
 
 def get_default_build_tags(puppy=False):
     """
@@ -53,10 +68,10 @@ def get_default_build_tags(puppy=False):
     include = ["all"]
     exclude = [] if sys.platform.startswith('linux') else LINUX_ONLY_TAGS
 
-    # remove all tags that are only availaible on debian distributions
+    # remove all tags that are only available on debian distributions
     distname = platform.linux_distribution()[0].lower()
-    if distname not in ['debian', 'ubuntu']:
-        exclude = exclude + DEBIAN_ONLY_TAGS
+    if distname not in REDHAT_AND_DEBIAN_DIST:
+        exclude = exclude + REDHAT_AND_DEBIAN_ONLY_TAGS
 
     return get_build_tags(include, exclude)
 

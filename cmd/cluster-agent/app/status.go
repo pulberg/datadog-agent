@@ -1,7 +1,9 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
+
+// +build kubeapiserver
 
 package app
 
@@ -37,6 +39,8 @@ var statusCmd = &cobra.Command{
 	Short: "Print the current status",
 	Long:  ``,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// we'll search for a config file named `datadog-cluster.yaml`
+		config.Datadog.SetConfigName("datadog-cluster")
 		err := common.SetupConfig(confPath)
 		if err != nil {
 			return fmt.Errorf("unable to set up global agent configuration: %v", err)
@@ -55,7 +59,7 @@ func requestStatus() error {
 	var s string
 	c := util.GetClient(false) // FIX: get certificates right then make this true
 	// TODO use https
-	urlstr := fmt.Sprintf("https://localhost:%v/status", config.Datadog.GetInt("cluster_agent_cmd_port"))
+	urlstr := fmt.Sprintf("https://localhost:%v/status", config.Datadog.GetInt("cluster_agent.cmd_port"))
 
 	// Set session token
 	e = util.SetAuthToken()

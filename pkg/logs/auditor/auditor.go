@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package auditor
 
@@ -9,12 +9,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/DataDog/datadog-agent/pkg/status/health"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 
+	"github.com/DataDog/datadog-agent/pkg/logs/config"
 	"github.com/DataDog/datadog-agent/pkg/logs/message"
 )
 
@@ -24,6 +27,11 @@ const defaultTTL = 23 * time.Hour
 
 // latest version of the API used by the auditor to retrieve the registry from disk.
 const registryAPIVersion = 2
+
+// Registry holds a list of offsets.
+type Registry interface {
+	GetOffset(identifier string) string
+}
 
 // A RegistryEntry represents an entry in the registry where we keep track
 // of current offsets
@@ -40,7 +48,8 @@ type JSONRegistry struct {
 
 // An Auditor handles messages successfully submitted to the intake
 type Auditor struct {
-	inputChan    chan message.Message
+	health       *health.Handle
+	inputChan    chan *message.Message
 	registry     map[string]*RegistryEntry
 	registryPath string
 	mu           sync.Mutex
@@ -49,17 +58,18 @@ type Auditor struct {
 }
 
 // New returns an initialized Auditor
-func New(inputChan chan message.Message, runPath string) *Auditor {
+func New(runPath string, health *health.Handle) *Auditor {
 	return &Auditor{
-		inputChan:    inputChan,
+		health:       health,
 		registryPath: filepath.Join(runPath, "registry.json"),
 		entryTTL:     defaultTTL,
-		done:         make(chan struct{}),
 	}
 }
 
 // Start starts the Auditor
 func (a *Auditor) Start() {
+	a.inputChan = make(chan *message.Message, config.ChanSize)
+	a.done = make(chan struct{})
 	a.registry = a.recoverRegistry()
 	a.cleanupRegistry()
 	go a.run()
@@ -67,8 +77,16 @@ func (a *Auditor) Start() {
 
 // Stop stops the Auditor
 func (a *Auditor) Stop() {
-	close(a.inputChan)
-	<-a.done
+	if a.inputChan != nil {
+		close(a.inputChan)
+	}
+
+	if a.done != nil {
+		<-a.done
+		a.done = nil
+	}
+	a.inputChan = nil
+
 	a.cleanupRegistry()
 	err := a.flushRegistry()
 	if err != nil {
@@ -76,9 +94,15 @@ func (a *Auditor) Stop() {
 	}
 }
 
-// GetLastCommittedOffset returns the last committed offset for a given identifier,
+// Channel returns the channel to use to communicate with the auditor or nil
+// if the auditor is currently stopped.
+func (a *Auditor) Channel() chan *message.Message {
+	return a.inputChan
+}
+
+// GetOffset returns the last committed offset for a given identifier,
 // returns an empty string if it does not exist.
-func (a *Auditor) GetLastCommittedOffset(identifier string) string {
+func (a *Auditor) GetOffset(identifier string) string {
 	r := a.readOnlyRegistryCopy()
 	entry, exists := r[identifier]
 	if !exists {
@@ -98,15 +122,17 @@ func (a *Auditor) run() {
 		a.done <- struct{}{}
 	}()
 
+	var fileError sync.Once
 	for {
 		select {
+		case <-a.health.C:
 		case msg, isOpen := <-a.inputChan:
 			if !isOpen {
 				// inputChan has been closed, no need to update the registry anymore
 				return
 			}
 			// update the registry with new entry
-			a.updateRegistry(msg.GetOrigin().Identifier, msg.GetOrigin().Offset)
+			a.updateRegistry(msg.Origin.Identifier, msg.Origin.Offset)
 		case <-cleanUpTicker.C:
 			// remove expired offsets from registry
 			a.cleanupRegistry()
@@ -114,7 +140,13 @@ func (a *Auditor) run() {
 			// saves current registry into disk
 			err := a.flushRegistry()
 			if err != nil {
-				log.Warn(err)
+				if os.IsPermission(err) || os.IsNotExist(err) {
+					fileError.Do(func() {
+						log.Warn(err)
+					})
+				} else {
+					log.Warn(err)
+				}
 			}
 		}
 	}

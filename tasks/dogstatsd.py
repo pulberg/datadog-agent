@@ -13,7 +13,7 @@ from invoke import task
 from invoke.exceptions import Exit
 
 from .build_tags import get_build_tags, get_default_build_tags
-from .utils import get_build_flags, bin_name, get_root
+from .utils import get_build_flags, bin_name, get_root, load_release_versions, get_version
 from .utils import REPO_PATH
 
 from .go import deps
@@ -21,12 +21,13 @@ from .go import deps
 # constants
 DOGSTATSD_BIN_PATH = os.path.join(".", "bin", "dogstatsd")
 STATIC_BIN_PATH = os.path.join(".", "bin", "static")
-MAX_BINARY_SIZE = 15 * 1024
+MAX_BINARY_SIZE = 20 * 1024
 DOGSTATSD_TAG = "datadog/dogstatsd:master"
 DEFAULT_BUILD_TAGS = [
     "zlib",
     "docker",
     "kubelet",
+    "secrets",
 ]
 
 
@@ -45,8 +46,9 @@ def build(ctx, rebuild=False, race=False, static=False, build_include=None,
     if static:
         bin_path = STATIC_BIN_PATH
 
+    # NOTE: consider stripping symbols to reduce binary size
     cmd = "go build {race_opt} {build_type} -tags '{build_tags}' -o {bin_name} "
-    cmd += "-gcflags=\"{gcflags}\" -ldflags=\"{ldflags}\" {REPO_PATH}/cmd/dogstatsd/"
+    cmd += "-gcflags=\"{gcflags}\" -ldflags=\"{ldflags}\" {REPO_PATH}/cmd/dogstatsd"
     args = {
         "race_opt": "-race" if race else "",
         "build_type": "-a" if rebuild else "",
@@ -68,6 +70,16 @@ def build(ctx, rebuild=False, race=False, static=False, build_include=None,
     }
     cmd = "go generate {}/cmd/dogstatsd"
     ctx.run(cmd.format(REPO_PATH), env=env)
+
+    if static and sys.platform.startswith("linux"):
+        cmd = "file {bin_name} "
+        args = {
+            "bin_name": os.path.join(bin_path, bin_name("dogstatsd")),
+        }
+        result = ctx.run(cmd.format(**args))
+        if "statically linked" not in result.stdout:
+            print("Dogstatsd binary is not static, exiting...")
+            raise Exit(code=1)
 
     refresh_assets(ctx)
 
@@ -146,7 +158,7 @@ def size_test(ctx, skip_build=False):
 
 @task
 def omnibus_build(ctx, log_level="info", base_dir=None, gem_path=None,
-                  skip_deps=False, omnibus_s3_cache=False):
+                  skip_deps=False, release_version="nightly", omnibus_s3_cache=False):
     """
     Build the Dogstatsd packages with Omnibus Installer.
     """
@@ -166,10 +178,11 @@ def omnibus_build(ctx, log_level="info", base_dir=None, gem_path=None,
         overrides_cmd = "--override=" + " ".join(overrides)
 
     with ctx.cd("omnibus"):
+        env = load_release_versions(ctx, release_version)
         cmd = "bundle install"
         if gem_path:
             cmd += " --path {}".format(gem_path)
-        ctx.run(cmd)
+        ctx.run(cmd, env=env)
         omnibus = "bundle exec omnibus.bat" if sys.platform == 'win32' else "bundle exec omnibus"
         cmd = "{omnibus} build dogstatsd --log-level={log_level} {populate_s3_cache} {overrides}"
         args = {
@@ -180,7 +193,8 @@ def omnibus_build(ctx, log_level="info", base_dir=None, gem_path=None,
         }
         if omnibus_s3_cache:
             args['populate_s3_cache'] = " --populate-s3-cache "
-        ctx.run(cmd.format(**args))
+        env['PACKAGE_VERSION'] = get_version(ctx, include_git=True, url_safe=True, git_sha_length=7)
+        ctx.run(cmd.format(**args), env=env)
 
 
 @task

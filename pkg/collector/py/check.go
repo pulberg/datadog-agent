@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build cpython
 
@@ -13,14 +13,13 @@ import (
 	"runtime"
 	"time"
 
-	"gopkg.in/yaml.v2"
+	python "github.com/sbinet/go-python"
+	yaml "gopkg.in/yaml.v2"
 
 	"github.com/DataDog/datadog-agent/pkg/aggregator"
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
 	"github.com/DataDog/datadog-agent/pkg/collector/check"
 	"github.com/DataDog/datadog-agent/pkg/config"
-	"github.com/sbinet/go-python"
-
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
@@ -30,6 +29,7 @@ import "C"
 // PythonCheck represents a Python check, implements `Check` interface
 type PythonCheck struct {
 	id           check.ID
+	version      string
 	instance     *python.PyObject
 	class        *python.PyObject
 	ModuleName   string
@@ -128,6 +128,11 @@ func (c *PythonCheck) String() string {
 	return c.ModuleName
 }
 
+// Version returns the version of the check if load from a python wheel
+func (c *PythonCheck) Version() string {
+	return c.version
+}
+
 // GetWarnings grabs the last warnings from the struct
 func (c *PythonCheck) GetWarnings() []error {
 	warnings := c.lastWarnings
@@ -214,13 +219,25 @@ func (c *PythonCheck) Configure(data integration.Data, initConfig integration.Da
 		return err
 	}
 
+	commonOptions := integration.CommonInstanceConfig{}
+	err = yaml.Unmarshal(data, &commonOptions)
+	if err != nil {
+		log.Errorf("invalid instance section for check %s: %s", string(c.id), err)
+		return err
+	}
+
 	// See if a collection interval was specified
-	x, ok := rawInstances["min_collection_interval"]
-	if ok {
-		// we should receive an int from the unmarshaller
-		if intl, ok := x.(int); ok {
-			// all good, convert to the right type, assuming YAML contains seconds
-			c.interval = time.Duration(intl) * time.Second
+	if commonOptions.MinCollectionInterval > 0 {
+		c.interval = time.Duration(commonOptions.MinCollectionInterval) * time.Second
+	}
+
+	// Disable default hostname if specified
+	if commonOptions.EmptyDefaultHostname {
+		s, err := aggregator.GetSender(c.id)
+		if err != nil {
+			log.Errorf("failed to retrieve a sender for check %s: %s", string(c.id), err)
+		} else {
+			s.DisableDefaultHostname(true)
 		}
 	}
 

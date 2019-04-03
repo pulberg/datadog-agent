@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build cpython
 
@@ -9,12 +9,14 @@
 package py
 
 import (
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/DataDog/datadog-agent/pkg/aggregator/mocksender"
 	"github.com/DataDog/datadog-agent/pkg/collector/check"
 	"github.com/DataDog/datadog-agent/pkg/config"
+
 	python "github.com/sbinet/go-python"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -48,8 +50,9 @@ func getClass(moduleName, className string) (checkClass *python.PyObject) {
 }
 
 func getCheckInstance(moduleName, className string) (*PythonCheck, error) {
-	config.Datadog.Set("foo_agent", "bar_agent")
-	defer config.Datadog.Set("foo_agent", nil)
+	mockConfig := config.Mock()
+	mockConfig.Set("foo_agent", "bar_agent")
+	defer mockConfig.Set("foo_agent", nil)
 
 	checkClass := getClass(moduleName, className)
 	check := NewPythonCheck(moduleName, checkClass)
@@ -73,6 +76,57 @@ func TestRun(t *testing.T) {
 	check, _ := getCheckInstance("testcheck", "TestCheck")
 	err := check.Run()
 	assert.Nil(t, err)
+}
+
+func TestSubprocessRun(t *testing.T) {
+	check, _ := getCheckInstance("testsubprocess", "TestSubprocessCheck")
+	err := check.Run()
+	assert.Nil(t, err)
+}
+
+func TestSubprocessRunConcurrent(t *testing.T) {
+	instances := make([]*PythonCheck, 30)
+	for i := range instances {
+		check, _ := getCheckInstance("testsubprocess", "TestSubprocessCheck")
+		instances[i] = check
+	}
+
+	// do this a few times, and cancel
+	wg := sync.WaitGroup{}
+	for _, check := range instances {
+		wg.Add(1)
+		go func(c *PythonCheck) {
+			err := c.Run()
+			assert.Nil(t, err)
+			wg.Done()
+		}(check)
+	}
+
+	wg.Wait()
+}
+
+func TestSubprocessRunConcurrentCancel(t *testing.T) {
+	instances := make([]*PythonCheck, 30)
+	for i := range instances {
+		check, _ := getCheckInstance("testsubprocess", "TestSubprocessCheck")
+		instances[i] = check
+	}
+
+	// do this a few times, and cancel
+	wg := sync.WaitGroup{}
+	for _, check := range instances {
+		wg.Add(1)
+		go func(c *PythonCheck) {
+			err := c.Run()
+			assert.Nil(t, err)
+			wg.Done()
+		}(check)
+	}
+
+	time.Sleep(2 * time.Second)
+	TerminateRunningProcesses()
+
+	wg.Wait()
 }
 
 func TestWarning(t *testing.T) {
@@ -100,6 +154,16 @@ func TestInterval(t *testing.T) {
 	assert.Equal(t, time.Duration(1)*time.Second, c.Interval())
 }
 
+func TestName(t *testing.T) {
+	c, _ := getCheckInstance("testcheck", "TestCheck")
+	c.Configure([]byte("name: test"), []byte("foo: bar"))
+	assert.Equal(t, string(c.ID()), "testcheck:test:bb22958a762de21b")
+
+	c, _ = getCheckInstance("testcheck", "TestCheck")
+	c.Configure([]byte("foo: bar"), []byte("foo: bar"))
+	assert.Equal(t, string(c.ID()), "testcheck:2144e63501a5cc65")
+}
+
 func TestInitKwargsCheck(t *testing.T) {
 	_, err := getCheckInstance("kwargs_init_signature", "TestCheck")
 	assert.Nil(t, err)
@@ -123,8 +187,7 @@ func TestInitNewSignatureCheck(t *testing.T) {
 func TestInitException(t *testing.T) {
 	_, err := getCheckInstance("init_exception", "TestCheck")
 
-	assert.Contains(t, err.Error(), "could not invoke python check constructor: ['Traceback (most recent call last):\\n")
-	assert.Contains(t, err.Error(), "raise RuntimeError(\"unexpected error\")\\n', 'RuntimeError: unexpected error\\n']")
+	assert.Regexp(t, "could not invoke python check constructor: Traceback \\(most recent call last\\):\n  File \"[\\S]+(\\/|\\\\)init_exception\\.py\", line 11, in __init__\n    raise RuntimeError\\(\"unexpected error\"\\)\nRuntimeError: unexpected error", err.Error())
 }
 
 func TestInitNoTracebackException(t *testing.T) {

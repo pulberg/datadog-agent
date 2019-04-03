@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package autodiscovery
 
@@ -15,9 +15,9 @@ import (
 
 func TestNew(t *testing.T) {
 	cache := NewTemplateCache()
-	assert.Len(t, cache.id2digests, 0)
-	assert.Len(t, cache.digest2ids, 0)
-	assert.Len(t, cache.digest2template, 0)
+	assert.Len(t, cache.adIDToDigests, 0)
+	assert.Len(t, cache.digestToADId, 0)
+	assert.Len(t, cache.digestToTemplate, 0)
 }
 
 func TestSet(t *testing.T) {
@@ -30,21 +30,21 @@ func TestSet(t *testing.T) {
 	err = cache.Set(tpl1)
 	require.Nil(t, err)
 
-	assert.Len(t, cache.id2digests, 2)
-	assert.Len(t, cache.id2digests["foo"], 1)
-	assert.Len(t, cache.id2digests["bar"], 1)
-	assert.Len(t, cache.digest2ids, 1)
-	assert.Len(t, cache.digest2template, 1)
+	assert.Len(t, cache.adIDToDigests, 2)
+	assert.Len(t, cache.adIDToDigests["foo"], 1)
+	assert.Len(t, cache.adIDToDigests["bar"], 1)
+	assert.Len(t, cache.digestToADId, 1)
+	assert.Len(t, cache.digestToTemplate, 1)
 
 	tpl2 := integration.Config{ADIdentifiers: []string{"foo"}}
 	err = cache.Set(tpl2)
 
 	require.Nil(t, err)
-	assert.Len(t, cache.id2digests, 2)
-	assert.Len(t, cache.id2digests["foo"], 2)
-	assert.Len(t, cache.id2digests["bar"], 1)
-	assert.Len(t, cache.digest2ids, 2)
-	assert.Len(t, cache.digest2template, 2)
+	assert.Len(t, cache.adIDToDigests, 2)
+	assert.Len(t, cache.adIDToDigests["foo"], 2)
+	assert.Len(t, cache.adIDToDigests["bar"], 1)
+	assert.Len(t, cache.digestToADId, 2)
+	assert.Len(t, cache.digestToTemplate, 2)
 
 	// no identifiers at all
 	tpl3 := integration.Config{ADIdentifiers: []string{}}
@@ -62,11 +62,11 @@ func TestDel(t *testing.T) {
 	err = cache.Del(tpl)
 	require.Nil(t, err)
 
-	require.Len(t, cache.id2digests, 2)
-	assert.Len(t, cache.id2digests["foo"], 0)
-	assert.Len(t, cache.id2digests["bar"], 0)
-	assert.Len(t, cache.digest2ids, 0)
-	assert.Len(t, cache.digest2template, 0)
+	require.Len(t, cache.adIDToDigests, 2)
+	assert.Len(t, cache.adIDToDigests["foo"], 0)
+	assert.Len(t, cache.adIDToDigests["bar"], 0)
+	assert.Len(t, cache.digestToADId, 0)
+	assert.Len(t, cache.digestToTemplate, 0)
 
 	// delete for an unknown identifier
 	err = cache.Del(integration.Config{ADIdentifiers: []string{"baz"}})
@@ -93,8 +93,8 @@ func TestGetUnresolvedTemplates(t *testing.T) {
 	cache := NewTemplateCache()
 	tpl := integration.Config{ADIdentifiers: []string{"foo", "bar"}}
 	cache.Set(tpl)
-	expected := map[string]integration.Config{
-		"foo,bar": tpl,
+	expected := map[string][]integration.Config{
+		"foo,bar": {tpl},
 	}
 
 	assert.Equal(t, cache.GetUnresolvedTemplates(), expected)

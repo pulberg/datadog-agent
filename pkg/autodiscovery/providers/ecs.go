@@ -41,7 +41,7 @@ func NewECSConfigProvider(config config.ConfigurationProviders) (ConfigProvider,
 
 // String returns a string representation of the ECSConfigProvider
 func (p *ECSConfigProvider) String() string {
-	return "ECS container labels"
+	return ECS
 }
 
 // IsUpToDate updates the list of AD templates versions in the Agent's cache and checks the list is up to date compared to ECS' data.
@@ -83,16 +83,13 @@ func (p *ECSConfigProvider) getTaskMetadata() (ecs.TaskMetadata, error) {
 func parseECSContainers(containers []ecs.Container) ([]integration.Config, error) {
 	var templates []integration.Config
 	for _, c := range containers {
-		configs, err := extractTemplatesFromMap(docker.ContainerIDToEntityName(c.DockerID), c.Labels, ecsADLabelPrefix)
-		switch {
-		case err != nil:
+		configs, errors := extractTemplatesFromMap(docker.ContainerIDToEntityName(c.DockerID), c.Labels, ecsADLabelPrefix)
+
+		for _, err := range errors {
 			log.Errorf("unable to extract templates for container %s - %s", c.DockerID, err)
-			continue
-		case len(configs) == 0:
-			continue
-		default:
-			templates = append(templates, configs...)
 		}
+
+		templates = append(templates, configs...)
 	}
 	return templates, nil
 }

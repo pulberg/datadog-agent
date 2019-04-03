@@ -8,7 +8,7 @@ clone_folder: C:\gopath\src\github.com\DataDog\datadog-agent
 # environment must be set for python 64 bit
 environment:
   GOPATH: C:\gopath
-  GOROOT: C:\go19
+  GOROOT: C:\go111
   RUBY_PATH: C:\Ruby23-x64
   RI_DEVKIT: C:\Ruby23-x64\DevKit\
   PYTHONPATH: c:\python27-x64
@@ -27,7 +27,10 @@ install:
   - 7z x *.zip > NUL
   - set PATH=C:\deps\bin;%GOPATH%\bin;%GOROOT%\bin;%RUBY_PATH%\bin;%RI_DEVKIT%bin;%RI_DEVKIT%mingw\bin;c:\python27-x64;c:\python27-x64\scripts;%PATH%
   - go version
-  - pip install invoke
+  - pip install codecov
+  - pip install -r %GOPATH%\src\github.com\DataDog\datadog-agent\requirements.txt
+  # create 'ddagentuser' user to test the secrets feature on windows
+  - ps: $Password = ConvertTo-SecureString "dummyPW_:-gch6Rejae9" -AsPlainText -Force; New-LocalUser -Name "ddagentuser" -Description "Test user for the secrets feature on windows." -Password $Password
 
 cache:
   - '%GOPATH%\bin'
@@ -38,4 +41,5 @@ build: off
 test_script:
   - cd %APPVEYOR_BUILD_FOLDER%
   - inv -e deps
-  - inv -e test --race --profile --fail-on-fmt
+  - inv -e test --coverage --race --profile --fail-on-fmt
+  - codecov -f profile.cov -F windows

@@ -1,12 +1,11 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package forwarder
 
 import (
-	"strconv"
 	"testing"
 	"time"
 
@@ -104,8 +103,8 @@ func TestRetryTransactions(t *testing.T) {
 	forwarder.init()
 	forwarder.retryQueueLimit = 1
 
-	// Default value should be nil
-	assert.Nil(t, transactionsExpvar.Get("Dropped"))
+	// Default value should be 0
+	assert.Equal(t, int64(0), transactionsDropped.Value())
 
 	t1 := NewHTTPTransaction()
 	t1.Domain = "domain/"
@@ -127,9 +126,7 @@ func TestRetryTransactions(t *testing.T) {
 	forwarder.retryTransactions(time.Now())
 	assert.Len(t, forwarder.retryQueue, 1)
 	assert.Len(t, forwarder.lowPrio, 1)
-	require.NotNil(t, transactionsExpvar.Get("Dropped"))
-	dropped, _ := strconv.ParseInt(transactionsExpvar.Get("Dropped").String(), 10, 64)
-	assert.Equal(t, int64(1), dropped)
+	assert.Equal(t, int64(1), transactionsDropped.Value())
 }
 
 func TestForwarderRetry(t *testing.T) {

@@ -1,21 +1,29 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build kubelet
 
 package collectors
 
 import (
+	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 
 	"github.com/DataDog/datadog-agent/pkg/tagger/utils"
-	"github.com/DataDog/datadog-agent/pkg/util/docker"
+	"github.com/DataDog/datadog-agent/pkg/util/containers"
 	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/kubelet"
+)
+
+const (
+	podAnnotationPrefix              = "ad.datadoghq.com/"
+	podContainerTagsAnnotationFormat = podAnnotationPrefix + "%s.tags"
+	podTagsAnnotation                = podAnnotationPrefix + "tags"
 )
 
 // KubeAllowedEncodeStringAlphaNums holds the charactes allowed in replicaset names from as parent deployment
@@ -33,13 +41,15 @@ func (c *KubeletCollector) parsePods(pods []*kubelet.Pod) ([]*TagInfo, error) {
 		tags := utils.NewTagList()
 
 		// Pod name
-		tags.AddHigh("pod_name", pod.Metadata.Name)
+		tags.AddOrchestrator("pod_name", pod.Metadata.Name)
 		tags.AddLow("kube_namespace", pod.Metadata.Namespace)
 
 		// Pod labels
 		for name, value := range pod.Metadata.Labels {
-			if tagName, found := c.labelsAsTags[strings.ToLower(name)]; found {
-				tags.AddAuto(tagName, value)
+			for pattern, tmpl := range c.labelsAsTags {
+				if ok, _ := filepath.Match(pattern, strings.ToLower(name)); ok {
+					tags.AddAuto(resolveTag(tmpl, name), value)
+				}
 			}
 		}
 
@@ -49,13 +59,21 @@ func (c *KubeletCollector) parsePods(pods []*kubelet.Pod) ([]*TagInfo, error) {
 				tags.AddAuto(tagName, value)
 			}
 		}
+		if podTags, found := extractTagsFromMap(podTagsAnnotation, pod.Metadata.Annotations); found {
+			for tagName, value := range podTags {
+				tags.AddAuto(tagName, value)
+			}
+		}
+
+		// Pod phase
+		tags.AddLow("pod_phase", strings.ToLower(pod.Status.Phase))
 
 		// OpenShift pod annotations
 		if dc_name, found := pod.Metadata.Annotations["openshift.io/deployment-config.name"]; found {
 			tags.AddLow("oshift_deployment_config", dc_name)
 		}
 		if deploy_name, found := pod.Metadata.Annotations["openshift.io/deployment.name"]; found {
-			tags.AddHigh("oshift_deployment", deploy_name)
+			tags.AddOrchestrator("oshift_deployment", deploy_name)
 		}
 
 		// Creator
@@ -72,11 +90,11 @@ func (c *KubeletCollector) parsePods(pods []*kubelet.Pod) ([]*TagInfo, error) {
 			case "StatefulSet":
 				tags.AddLow("kube_stateful_set", owner.Name)
 			case "Job":
-				tags.AddHigh("kube_job", owner.Name) // TODO detect if no from cronjob, then low card
+				tags.AddOrchestrator("kube_job", owner.Name) // TODO detect if no from cronjob, then low card
 			case "ReplicaSet":
 				deployment := c.parseDeploymentForReplicaset(owner.Name)
 				if len(deployment) > 0 {
-					tags.AddHigh("kube_replica_set", owner.Name)
+					tags.AddOrchestrator("kube_replica_set", owner.Name)
 					tags.AddLow("kube_deployment", deployment)
 				} else {
 					tags.AddLow("kube_replica_set", owner.Name)
@@ -86,44 +104,64 @@ func (c *KubeletCollector) parsePods(pods []*kubelet.Pod) ([]*TagInfo, error) {
 			}
 		}
 
-		low, high := tags.Compute()
+		low, orch, high := tags.Compute()
 		if pod.Metadata.UID != "" {
 			podInfo := &TagInfo{
-				Source:       kubeletCollectorName,
-				Entity:       kubelet.PodUIDToEntityName(pod.Metadata.UID),
-				HighCardTags: high,
-				LowCardTags:  low,
+				Source:               kubeletCollectorName,
+				Entity:               kubelet.PodUIDToEntityName(pod.Metadata.UID),
+				HighCardTags:         high,
+				OrchestratorCardTags: orch,
+				LowCardTags:          low,
 			}
 			output = append(output, podInfo)
 		}
 
 		// container tags
 		for _, container := range pod.Status.Containers {
-			lowC := append(low, fmt.Sprintf("kube_container_name:%s", container.Name))
+			cTags := tags.Copy()
+			cTags.AddLow("kube_container_name", container.Name)
+			cTags.AddHigh("container_id", kubelet.TrimRuntimeFromCID(container.ID))
+			if container.Name != "" && pod.Metadata.Name != "" {
+				cTags.AddHigh("display_container_name", fmt.Sprintf("%s_%s", container.Name, pod.Metadata.Name))
+			}
+
 			// check image tag in spec
 			for _, containerSpec := range pod.Spec.Containers {
 				if containerSpec.Name == container.Name {
-					imageName, shortImage, imageTag, err := docker.SplitImageName(containerSpec.Image)
+					imageName, shortImage, imageTag, err := containers.SplitImageName(containerSpec.Image)
 					if err != nil {
 						log.Debugf("Cannot split %s: %s", containerSpec.Image, err)
 						break
 					}
-					lowC = append(lowC, fmt.Sprintf("image_name:%s", imageName))
-					lowC = append(lowC, fmt.Sprintf("short_image:%s", shortImage))
+					cTags.AddLow("image_name", imageName)
+					cTags.AddLow("short_image", shortImage)
 					if imageTag == "" {
 						// k8s default to latest if tag is omitted
 						imageTag = "latest"
 					}
-					lowC = append(lowC, fmt.Sprintf("image_tag:%s", imageTag))
+					cTags.AddLow("image_tag", imageTag)
 					break
 				}
 			}
 
+			// container-specific tags provided through pod annotation
+			containerTags, found := extractTagsFromMap(
+				fmt.Sprintf(podContainerTagsAnnotationFormat, container.Name),
+				pod.Metadata.Annotations,
+			)
+			if found {
+				for tagName, value := range containerTags {
+					cTags.AddAuto(tagName, value)
+				}
+			}
+
+			cLow, cOrch, cHigh := cTags.Compute()
 			info := &TagInfo{
-				Source:       kubeletCollectorName,
-				Entity:       container.ID,
-				HighCardTags: high,
-				LowCardTags:  lowC,
+				Source:               kubeletCollectorName,
+				Entity:               container.ID,
+				HighCardTags:         cHigh,
+				OrchestratorCardTags: cOrch,
+				LowCardTags:          cLow,
 			}
 			output = append(output, info)
 		}
@@ -151,4 +189,38 @@ func (c *KubeletCollector) parseDeploymentForReplicaset(name string) string {
 	}
 
 	return name[:lastDash]
+}
+
+// extractTagsFromMap extracts tags contained in a JSON string stored at the
+// given key. If no valid tag definition is found at this key, it will return
+// false. Otherwise it returns a map containing extracted tags.
+func extractTagsFromMap(key string, input map[string]string) (map[string]string, bool) {
+	jsonTags, found := input[key]
+	if !found {
+		return nil, false
+	}
+
+	tags, err := parseJSONValue(jsonTags)
+	if err != nil {
+		log.Errorf("can't parse value for annotation %s: %s", key, err)
+		return nil, false
+	}
+
+	return tags, true
+}
+
+// parseJSONValue returns a map from the given JSON string.
+func parseJSONValue(value string) (map[string]string, error) {
+	if value == "" {
+		return nil, fmt.Errorf("value is empty")
+	}
+
+	var result map[string]string
+
+	err := json.Unmarshal([]byte(value), &result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal JSON: %s", err)
+	}
+
+	return result, nil
 }

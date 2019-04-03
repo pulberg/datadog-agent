@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package listeners
 
@@ -9,15 +9,17 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/DataDog/datadog-agent/pkg/util/cache"
-	"github.com/DataDog/datadog-agent/pkg/util/docker"
-	"golang.org/x/sys/unix"
+	"github.com/DataDog/datadog-agent/pkg/util/containers"
 )
 
 const (
-	// PIDToContainerKeyPrefix holds the name prefix for cache keys
-	PIDToContainerKeyPrefix = "pid_to_container"
+	pidToEntityCacheKeyPrefix = "pid_to_entity"
+	pidToEntityCacheDuration  = time.Minute
 )
 
 // getUDSAncillarySize gets the needed buffer size to retrieve the ancillary data
@@ -56,35 +58,40 @@ func processUDSOrigin(ancillary []byte) (string, error) {
 	if err != nil {
 		return NoOrigin, err
 	}
-	container, err := getContainerForPID(cred.Pid)
+
+	if cred.Pid == 0 {
+		return NoOrigin, fmt.Errorf("matched PID for the process is 0, it belongs " +
+			"probably to another namespace. Is the agent in host PID mode?")
+	}
+
+	entity, err := getEntityForPID(cred.Pid)
 	if err != nil {
 		return NoOrigin, err
 	}
-	return container, nil
+	return entity, nil
 }
 
-// getContainerForPID returns the docker container id and caches the value for future lookups
-// As the result is cached and the lookup is really fast (parsing a local file), it can be
+// getEntityForPID returns the container entity name and caches the value for future lookups
+// As the result is cached and the lookup is really fast (parsing local files), it can be
 // called from the intake goroutine.
-func getContainerForPID(pid int32) (string, error) {
-	key := cache.BuildAgentKey(PIDToContainerKeyPrefix, strconv.Itoa(int(pid)))
+func getEntityForPID(pid int32) (string, error) {
+	key := cache.BuildAgentKey(pidToEntityCacheKeyPrefix, strconv.Itoa(int(pid)))
 	if x, found := cache.Cache.Get(key); found {
 		return x.(string), nil
 	}
-	id, err := docker.ContainerIDForPID(int(pid))
-	if err != nil {
+
+	entity, err := containers.EntityForPID(pid)
+	switch err {
+	case nil:
+		// No error, yay!
+		cache.Cache.Set(key, entity, pidToEntityCacheDuration)
+		return entity, nil
+	case containers.ErrNoRuntimeMatch, containers.ErrNoContainerMatch:
+		// No runtime detected, cache the `NoOrigin` result
+		cache.Cache.Set(key, NoOrigin, pidToEntityCacheDuration)
+		return NoOrigin, nil
+	default:
+		// Other lookup error, retry next time
 		return NoOrigin, err
 	}
-
-	var value string
-	if len(id) == 0 {
-		// If no container is found, it's probably a host process,
-		// cache the `NoOrigin` result for future packets
-		value = NoOrigin
-	} else {
-		value = fmt.Sprintf("docker://%s", id)
-	}
-
-	cache.Cache.Set(key, value, 0)
-	return value, err
 }

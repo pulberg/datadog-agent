@@ -50,6 +50,10 @@ if [ -n "$DD_HOSTNAME" ]; then
     dd_hostname=$DD_HOSTNAME
 fi
 
+if [ -n "$DD_SITE" ]; then
+    site="$DD_SITE"
+fi
+
 if [ -n "$DD_API_KEY" ]; then
     apikey=$DD_API_KEY
 fi
@@ -64,15 +68,22 @@ if [ -n "$DD_HOST_TAGS" ]; then
     host_tags=$DD_HOST_TAGS
 fi
 
-if [ -n "$DD_URL" ]; then
-  dd_url=$DD_URL
+if [ -n "$REPO_URL" ]; then
+  repo_url=$REPO_URL
 else
-  dd_url="datadoghq.com"
+  repo_url="datadoghq.com"
 fi
 
 dd_upgrade=
 if [ -n "$DD_UPGRADE" ]; then
   dd_upgrade=$DD_UPGRADE
+fi
+
+keyserver="hkp://keyserver.ubuntu.com:80"
+# use this env var to specify another key server, such as
+# hkp://p80.pool.sks-keyservers.net:80 for example.
+if [ -n "$DD_KEYSERVER" ]; then
+  keyserver="$DD_KEYSERVER"
 fi
 
 if [ ! $apikey ]; then
@@ -86,7 +97,7 @@ fi
 # OS/Distro Detection
 # Try lsb_release, fallback with /etc/issue then uname command
 KNOWN_DISTRIBUTION="(Debian|Ubuntu|RedHat|CentOS|openSUSE|Amazon|Arista|SUSE)"
-DISTRIBUTION=$(lsb_release -d 2>/dev/null | grep -Eo $KNOWN_DISTRIBUTION  || grep -Eo $KNOWN_DISTRIBUTION /etc/issue 2>/dev/null || grep -Eo $KNOWN_DISTRIBUTION /etc/Eos-release 2>/dev/null || uname -s)
+DISTRIBUTION=$(lsb_release -d 2>/dev/null | grep -Eo $KNOWN_DISTRIBUTION  || grep -Eo $KNOWN_DISTRIBUTION /etc/issue 2>/dev/null || grep -Eo $KNOWN_DISTRIBUTION /etc/Eos-release 2>/dev/null || grep -m1 -Eo $KNOWN_DISTRIBUTION /etc/os-release 2>/dev/null || uname -s)
 
 if [ $DISTRIBUTION = "Darwin" ]; then
     printf "\033[31mThis script does not support installing on the Mac.
@@ -104,7 +115,7 @@ elif [ -f /etc/system-release -o "$DISTRIBUTION" == "Amazon" ]; then
 # Arista is based off of Fedora14/18 but do not have /etc/redhat-release
 elif [ -f /etc/Eos-release -o "$DISTRIBUTION" == "Arista" ]; then
     OS="RedHat"
-# openSUSE and SUSE use /etc/SuSE-release
+# openSUSE and SUSE use /etc/SuSE-release or /etc/os-release
 elif [ -f /etc/SuSE-release -o "$DISTRIBUTION" == "SUSE" -o "$DISTRIBUTION" == "openSUSE" ]; then
     OS="SUSE"
 fi
@@ -127,12 +138,13 @@ if [ $OS = "RedHat" ]; then
         ARCHI="x86_64"
     fi
 
-    $sudo_cmd sh -c "echo -e '[datadog]\nname = Datadog, Inc.\nbaseurl = https://yum.${dd_url}/stable/6/$ARCHI/\nenabled=1\ngpgcheck=1\npriority=1\ngpgkey=https://yum.${dd_url}/DATADOG_RPM_KEY.public\n       https://yum.${dd_url}/DATADOG_RPM_KEY_E09422B3.public' > /etc/yum.repos.d/datadog.repo"
+    $sudo_cmd sh -c "echo -e '[datadog]\nname = Datadog, Inc.\nbaseurl = https://yum.${repo_url}/stable/6/$ARCHI/\nenabled=1\ngpgcheck=1\npriority=1\ngpgkey=https://yum.${repo_url}/DATADOG_RPM_KEY.public\n       https://yum.${repo_url}/DATADOG_RPM_KEY_E09422B3.public' > /etc/yum.repos.d/datadog.repo"
 
     printf "\033[34m* Installing the Datadog Agent package\n\033[0m\n"
     $sudo_cmd yum -y clean metadata
     $sudo_cmd yum -y --disablerepo='*' --enablerepo='datadog' install datadog-agent || $sudo_cmd yum -y install datadog-agent
 elif [ $OS = "Debian" ]; then
+
     printf "\033[34m\n* Installing apt-transport-https\n\033[0m\n"
     $sudo_cmd apt-get update || printf "\033[31m'apt-get update' failed, the script will not install the latest version of apt-transport-https.\033[0m\n"
     $sudo_cmd apt-get install -y apt-transport-https
@@ -143,8 +155,8 @@ elif [ $OS = "Debian" ]; then
       $sudo_cmd apt-get install -y dirmngr
     fi
     printf "\033[34m\n* Installing APT package sources for Datadog\n\033[0m\n"
-    $sudo_cmd sh -c "echo 'deb https://apt.${dd_url}/ stable 6' > /etc/apt/sources.list.d/datadog.list"
-    $sudo_cmd apt-key adv --recv-keys --keyserver hkp://keyserver.ubuntu.com:80 382E94DE
+    $sudo_cmd sh -c "echo 'deb https://apt.${repo_url}/ stable 6' > /etc/apt/sources.list.d/datadog.list"
+    $sudo_cmd apt-key adv --recv-keys --keyserver ${keyserver} 382E94DE
 
     printf "\033[34m\n* Installing the Datadog Agent package\n\033[0m\n"
     ERROR_MESSAGE="ERROR
@@ -173,10 +185,10 @@ elif [ $OS = "SUSE" ]; then
   fi
 
   echo -e "\033[34m\n* Installing YUM Repository for Datadog\n\033[0m"
-  $sudo_cmd sh -c "echo -e '[datadog]\nname=datadog\nenabled=1\nbaseurl=https://yum.${dd_url}/suse/stable/6/x86_64\ntype=rpm-md\ngpgcheck=1\nrepo_gpgcheck=0\ngpgkey=https://yum.${dd_url}/DATADOG_RPM_KEY.public' > /etc/zypp/repos.d/datadog.repo"
+  $sudo_cmd sh -c "echo -e '[datadog]\nname=datadog\nenabled=1\nbaseurl=https://yum.${repo_url}/suse/stable/6/x86_64\ntype=rpm-md\ngpgcheck=1\nrepo_gpgcheck=0\ngpgkey=https://yum.${repo_url}/DATADOG_RPM_KEY.public' > /etc/zypp/repos.d/datadog.repo"
 
   echo -e "\033[34m\n* Importing the Datadog GPG Key\n\033[0m"
-  $sudo_cmd rpm --import https://yum.${dd_url}/DATADOG_RPM_KEY.public
+  $sudo_cmd rpm --import https://yum.${repo_url}/DATADOG_RPM_KEY.public
 
   echo -e "\033[34m\n* Refreshing repositories\n\033[0m"
   $sudo_cmd zypper --non-interactive --no-gpg-check refresh datadog
@@ -224,6 +236,13 @@ else
       no_start=true
     fi
   fi
+  if [ $site ]; then
+    printf "\033[34m\n* Setting SITE in the Agent configuration: $CONF\n\033[0m\n"
+    $sudo_cmd sh -c "sed -i 's/# site:.*/site: $site/' $CONF"
+  fi
+  if [ -n "$DD_URL" ]; then
+    $sudo_cmd sh -c "sed -i 's/# dd_url:.*/dd_url: $DD_URL/' $CONF"
+  fi
   if [ $dd_hostname ]; then
     printf "\033[34m\n* Adding your HOSTNAME to the Agent configuration: $CONF\n\033[0m\n"
     $sudo_cmd sh -c "sed -i 's/# hostname:.*/hostname: $dd_hostname/' $CONF"
@@ -238,16 +257,22 @@ else
 fi
 
 
-# Use systemd by default
-restart_cmd="$sudo_cmd systemctl restart datadog-agent.service"
-stop_instructions="$sudo_cmd systemctl stop datadog-agent"
-start_instructions="$sudo_cmd systemctl start datadog-agent"
+# Use /usr/sbin/service by default. 
+# Some distros usually include compatibility scripts with Upstart or Systemd. Check with: `command -v service | xargs grep -E "(upstart|systemd)"`
+restart_cmd="$sudo_cmd service datadog-agent restart"
+stop_instructions="$sudo_cmd service datadog-agent stop"
+start_instructions="$sudo_cmd service datadog-agent start"
 
-# Try to detect Upstart, this works most of the times but still a best effort
-if /sbin/init --version 2>&1 | grep -q upstart; then
-    restart_cmd="$sudo_cmd start datadog-agent"
-    stop_instructions="$sudo_cmd stop datadog-agent"
-    start_instructions="$sudo_cmd start datadog-agent"
+if command -v systemctl 2>&1; then 
+  # Use systemd if systemctl binary exists
+  restart_cmd="$sudo_cmd systemctl restart datadog-agent.service"
+  stop_instructions="$sudo_cmd systemctl stop datadog-agent"
+  start_instructions="$sudo_cmd systemctl start datadog-agent"
+elif /sbin/init --version 2>&1 | grep -q upstart; then
+  # Try to detect Upstart, this works most of the times but still a best effort
+  restart_cmd="$sudo_cmd start datadog-agent"
+  stop_instructions="$sudo_cmd stop datadog-agent"
+  start_instructions="$sudo_cmd start datadog-agent"
 fi
 
 if [ $no_start ]; then

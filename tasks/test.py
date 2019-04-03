@@ -14,25 +14,22 @@ from invoke import task
 from invoke.exceptions import Exit
 
 from .utils import get_build_flags, get_version, pkg_config_path
-from .go import fmt, lint, vet, misspell, ineffassign
-from .build_tags import get_default_build_tags
+from .go import fmt, lint, vet, misspell, ineffassign, lint_licenses
+from .build_tags import get_default_build_tags, get_build_tags
 from .agent import integration_tests as agent_integration_tests
 from .dogstatsd import integration_tests as dsd_integration_tests
+from .trace_agent import integration_tests as trace_integration_tests
 from .cluster_agent import integration_tests as dca_integration_tests
+
+#We use `basestring` in the code for compat with python2 unicode strings.
+#This makes the same code work in python3 as well.
+try:
+    basestring
+except NameError:
+    basestring = str
 
 PROFILE_COV = "profile.cov"
 
-# List of packages to ignore when running tests on Windows platform
-WIN_PKG_BLACKLIST = [
-    "./pkg\\util\\xc",
-    "./pkg\\util\\container",
-    "./pkg\\util\\kubernetes",
-]
-
-NOTWIN_PKG_BLACKLIST = [
-    "./pkg/util/winutil",
-    "./pkg/util/winutil/pdhutil",
-]
 DEFAULT_TOOL_TARGETS = [
     "./pkg",
     "./cmd",
@@ -40,12 +37,14 @@ DEFAULT_TOOL_TARGETS = [
 
 DEFAULT_TEST_TARGETS = [
     "./pkg",
+    "./cmd",
 ]
 
 
 @task()
-def test(ctx, targets=None, coverage=False, race=False, profile=False, use_embedded_libs=False, fail_on_fmt=False,
-         timeout=120):
+def test(ctx, targets=None, coverage=False, build_include=None, build_exclude=None,
+    race=False, profile=False, use_embedded_libs=False, fail_on_fmt=False,
+    cpus=0, timeout=120):
     """
     Run all the tools and tests on the given targets. If targets are not specified,
     the value from `invoke.yaml` will be used.
@@ -63,7 +62,10 @@ def test(ctx, targets=None, coverage=False, race=False, profile=False, use_embed
     else:
         tool_targets = test_targets = targets
 
-    build_tags = get_default_build_tags()
+    build_include = get_default_build_tags() if build_include is None else build_include.split(",")
+    build_exclude = [] if build_exclude is None else build_exclude.split(",")
+    build_tags = get_build_tags(build_include, build_exclude)
+
     timeout = int(timeout)
 
     # explicitly run these tasks instead of using pre-tasks so we can
@@ -72,8 +74,12 @@ def test(ctx, targets=None, coverage=False, race=False, profile=False, use_embed
     lint_filenames(ctx)
     fmt(ctx, targets=tool_targets, fail_on_fmt=fail_on_fmt)
     lint(ctx, targets=tool_targets)
+    lint_licenses(ctx)
+    print("--- Vetting:")
     vet(ctx, targets=tool_targets, use_embedded_libs=use_embedded_libs)
+    print("--- Misspelling:")
     misspell(ctx, targets=tool_targets)
+    print("--- ineffassigning:")
     ineffassign(ctx, targets=tool_targets)
 
     with open(PROFILE_COV, "w") as f_cov:
@@ -88,6 +94,9 @@ def test(ctx, targets=None, coverage=False, race=False, profile=False, use_embed
 
     race_opt = ""
     covermode_opt = ""
+    build_cpus_opt = ""
+    if cpus:
+        build_cpus_opt = "-p {}".format(cpus)
     if race:
         race_opt = "-race"
     if coverage:
@@ -99,47 +108,26 @@ def test(ctx, targets=None, coverage=False, race=False, profile=False, use_embed
         else:
             covermode_opt = "-covermode=count"
 
-    if coverage:
-        matches = []
-        for target in test_targets:
-            for root, _, filenames in os.walk(target):
-                if fnmatch.filter(filenames, "*.go"):
-                    matches.append(root)
-    else:
-        matches = ["{}/...".format(t) for t in test_targets]
+    matches = ["{}/...".format(t) for t in test_targets]
     print("\n--- Running unit tests:")
-    for match in matches:
-        if sys.platform == 'win32':
-            if match in WIN_PKG_BLACKLIST:
-                print("Skipping blacklisted directory {}\n".format(match))
-                continue
-        else:
-            if match in NOTWIN_PKG_BLACKLIST:
-                print("Skipping blacklisted directory {}\n".format(match))
-                continue
 
-        coverprofile = ""
-        if coverage:
-            profile_tmp = "{}/profile.tmp".format(match)
-            coverprofile = "-coverprofile={}".format(profile_tmp)
-        cmd = 'go test -timeout {timeout}s -tags "{go_build_tags}" -gcflags="{gcflags}" -ldflags="{ldflags}" '
-        cmd += '{race_opt} -short {covermode_opt} {coverprofile} {pkg_folder}'
-        args = {
-            "go_build_tags": " ".join(build_tags),
-            "gcflags": gcflags,
-            "ldflags": ldflags,
-            "race_opt": race_opt,
-            "covermode_opt": covermode_opt,
-            "coverprofile": coverprofile,
-            "pkg_folder": match,
-            "timeout": timeout,
-        }
-        ctx.run(cmd.format(**args), env=env, out_stream=test_profiler)
-
-        if coverage:
-            if os.path.exists(profile_tmp):
-                ctx.run("cat {} | tail -n +2 >> {}".format(profile_tmp, PROFILE_COV))
-                os.remove(profile_tmp)
+    coverprofile = ""
+    if coverage:
+        coverprofile = "-coverprofile={}".format(PROFILE_COV)
+    cmd = 'go test -vet=off -timeout {timeout}s -tags "{go_build_tags}" -gcflags="{gcflags}" -ldflags="{ldflags}" '
+    cmd += '{build_cpus} {race_opt} -short {covermode_opt} {coverprofile} {pkg_folder}'
+    args = {
+        "go_build_tags": " ".join(build_tags),
+        "gcflags": gcflags,
+        "ldflags": ldflags,
+        "race_opt": race_opt,
+        "build_cpus": build_cpus_opt,
+        "covermode_opt": covermode_opt,
+        "coverprofile": coverprofile,
+        "pkg_folder": ' '.join(matches),
+        "timeout": timeout,
+    }
+    ctx.run(cmd.format(**args), env=env, out_stream=test_profiler)
 
     if coverage:
         print("\n--- Test coverage:")
@@ -149,6 +137,52 @@ def test(ctx, targets=None, coverage=False, race=False, profile=False, use_embed
         print ("\n--- Top 15 packages sorted by run time:")
         test_profiler.print_sorted(15)
 
+
+@task
+def lint_teamassignment(ctx):
+    """
+    Make sure PRs are assigned a team label
+    """
+    pr_url = os.environ.get("CIRCLE_PULL_REQUEST")
+    if pr_url:
+        import requests
+        pr_id = pr_url.rsplit('/')[-1]
+
+        res = requests.get("https://api.github.com/repos/DataDog/datadog-agent/issues/{}".format(pr_id))
+        issue = res.json()
+        if any([re.match('team/', l['name']) for l in issue.get('labels', {})]):
+            print("Team Assignment: %s" % l['name'])
+            return
+
+        print("PR %s requires team assignment" % pr_url)
+        raise Exit(code=1)
+
+    # The PR has not been created yet
+    else:
+        print("PR not yet created, skipping check for team assignment")
+
+@task
+def lint_milestone(ctx):
+    """
+    Make sure PRs are assigned a milestone
+    """
+    pr_url = os.environ.get("CIRCLE_PULL_REQUEST")
+    if pr_url:
+        import requests
+        pr_id = pr_url.rsplit('/')[-1]
+
+        res = requests.get("https://api.github.com/repos/DataDog/datadog-agent/issues/{}".format(pr_id))
+        pr = res.json()
+        if pr.get("milestone"):
+            print("Milestone: %s" % pr["milestone"].get("title", "NO_TITLE"))
+            return
+
+        print("PR %s requires a milestone" % pr_url)
+        raise Exit(code=1)
+
+    # The PR has not been created yet
+    else:
+        print("PR not yet created, skipping check for milestone")
 
 @task
 def lint_releasenote(ctx):
@@ -162,11 +196,11 @@ def lint_releasenote(ctx):
         import requests
         pr_id = pr_url.rsplit('/')[-1]
 
-        # first check 'noreno' label
+        # first check 'changelog/no-changelog' label
         res = requests.get("https://api.github.com/repos/DataDog/datadog-agent/issues/{}".format(pr_id))
         issue = res.json()
-        if any([l['name'] == 'noreno' for l in issue.get('labels', {})]):
-            print("'noreno' label found on the PR: skipping linting")
+        if any([l['name'] == 'changelog/no-changelog' for l in issue.get('labels', {})]):
+            print("'changelog/no-changelog' label found on the PR: skipping linting")
             return
 
         # Then check that at least one note was touched by the PR
@@ -216,21 +250,33 @@ def lint_releasenote(ctx):
 @task
 def lint_filenames(ctx):
     """
-    Scan files to ensure there are no filenames containing illegal characters
+    Scan files to ensure there are no filenames too long or containing illegal characters
     """
+    files = ctx.run("git ls-files -z", hide=True).stdout.split("\0")
+    failure = False
+
     if sys.platform == 'win32':
         print("Running on windows, no need to check filenames for illegal characters")
     else:
         print("Checking filenames for illegal characters")
         forbidden_chars = '<>:"\\|?*'
-        files = ctx.run("git ls-files -z", hide=True).stdout.split("\0")
-        failure = False
         for file in files:
             if any(char in file for char in forbidden_chars):
                 print("Error: Found illegal character in path {}".format(file))
                 failure = True
-        if failure:
-            raise Exit(code=1)
+
+    print("Checking filename length")
+    # Approximated length of the prefix of the repo during the windows release build
+    prefix_length = 160
+    # Maximum length supported by the win32 API
+    max_length = 255
+    for file in files:
+        if prefix_length + len(file) > max_length:
+            print("Error: path {} is too long ({} characters too many)".format(file, prefix_length + len(file) - max_length))
+            failure = True
+
+    if failure:
+        raise Exit(code=1)
 
 
 @task
@@ -241,6 +287,7 @@ def integration_tests(ctx, install_deps=False, race=False, remote_docker=False):
     agent_integration_tests(ctx, install_deps, race, remote_docker)
     dsd_integration_tests(ctx, install_deps, race, remote_docker)
     dca_integration_tests(ctx, install_deps, race, remote_docker)
+    trace_integration_tests(ctx, install_deps, race, remote_docker)
 
 
 @task
@@ -259,18 +306,6 @@ def e2e_tests(ctx, target="gitlab", image=""):
         os.environ["DATADOG_AGENT_IMAGE"] = image
 
     ctx.run("./test/e2e/scripts/setup-instance/00-entrypoint-%s.sh" % target)
-
-
-@task
-def version(ctx, url_safe=False, git_sha_length=7):
-    """
-    Get the agent version.
-    url_safe: get the version that is able to be addressed as a url
-    git_sha_length: different versions of git have a different short sha length,
-                    use this to explicitly set the version
-                    (the windows builder and the default ubuntu version have such an incompatibility)
-    """
-    print(get_version(ctx, include_git=True, url_safe=url_safe, git_sha_length=git_sha_length))
 
 
 class TestProfiler:

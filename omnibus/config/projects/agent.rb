@@ -1,7 +1,7 @@
 # Unless explicitly stated otherwise all files in this repository are licensed
 # under the Apache License Version 2.0.
 # This product includes software developed at Datadog (https:#www.datadoghq.com/).
-# Copyright 2018 Datadog, Inc.
+# Copyright 2016-2019 Datadog, Inc.
 
 require "./lib/ostools.rb"
 
@@ -21,10 +21,9 @@ else
   maintainer 'Datadog Packages <package@datadoghq.com>'
 end
 
-build_version do
-  source :git
-  output_format :dd_agent_format
-end
+# build_version is computed by an invoke command/function.
+# We can't call it directly from there, we pass it through the environment instead.
+build_version ENV['PACKAGE_VERSION']
 
 build_iteration 1
 
@@ -86,7 +85,7 @@ package :msi do
   wix_light_extension 'WixUtilExtension'
   extra_package_dir "#{Omnibus::Config.source_dir()}\\etc\\datadog-agent\\extra_package_files"
   additional_sign_files [
-      "#{install_dir}\\bin\\agent\\trace-agent.exe",
+      "#{Omnibus::Config.source_dir()}\\datadog-agent\\src\\github.com\\DataDog\\datadog-agent\\bin\\agent\\trace-agent.exe",
       "#{Omnibus::Config.source_dir()}\\datadog-agent\\src\\github.com\\DataDog\\datadog-agent\\bin\\agent\\agent.exe"
     ]
   if ENV['SIGN_WINDOWS']
@@ -115,21 +114,18 @@ dependency 'cacerts'
 # creates required build directories
 dependency 'datadog-agent-prepare'
 
-# Windows-specific dependencies
-if windows?
-  dependency 'pywin32'
-end
-
 # Datadog agent
 dependency 'datadog-agent'
 
 # Additional software
+dependency 'pip'
 dependency 'datadog-agent-integrations'
+dependency 'datadog-a7'
+dependency 'datadog-agent-env-check'
 dependency 'jmxfetch'
 
 # External agents
-dependency 'datadog-trace-agent'
-dependency 'datadog-process-agent'
+dependency 'datadog-process-agent' # Includes network-tracer
 
 if osx?
   dependency 'datadog-agent-mac-app'
@@ -156,13 +152,19 @@ dependency 'datadog-agent-finalize'
 if linux?
   extra_package_file '/etc/init/datadog-agent.conf'
   extra_package_file '/etc/init/datadog-agent-process.conf'
+  extra_package_file '/etc/init/datadog-agent-network.conf'
   extra_package_file '/etc/init/datadog-agent-trace.conf'
   systemd_directory = "/usr/lib/systemd/system"
   if debian?
     systemd_directory = "/lib/systemd/system"
+
+    extra_package_file "/etc/init.d/datadog-agent"
+    extra_package_file "/etc/init.d/datadog-agent-process"
+    extra_package_file "/etc/init.d/datadog-agent-trace"
   end
   extra_package_file "#{systemd_directory}/datadog-agent.service"
   extra_package_file "#{systemd_directory}/datadog-agent-process.service"
+  extra_package_file "#{systemd_directory}/datadog-agent-network.service"
   extra_package_file "#{systemd_directory}/datadog-agent-trace.service"
   extra_package_file '/etc/datadog-agent/'
   extra_package_file '/usr/bin/dd-agent'

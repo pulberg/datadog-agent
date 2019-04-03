@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build jmx
 
@@ -15,18 +15,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/DataDog/datadog-agent/cmd/agent/common"
 	api "github.com/DataDog/datadog-agent/pkg/api/util"
 	"github.com/DataDog/datadog-agent/pkg/collector/check"
 	"github.com/DataDog/datadog-agent/pkg/config"
+	"github.com/DataDog/datadog-agent/pkg/status/health"
 	"github.com/DataDog/datadog-agent/pkg/util/executable"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
 const (
-	jmxJarName                        = "jmxfetch-0.20.0-jar-with-dependencies.jar"
+	jmxJarName                        = "jmxfetch-0.27.0-jar-with-dependencies.jar"
 	jmxMainClass                      = "org.datadog.jmxfetch.App"
 	defaultJmxCommand                 = "collect"
 	defaultJvmMaxMemoryAllocation     = " -Xmx200m"
@@ -71,6 +73,9 @@ type JMXFetch struct {
 	defaultJmxCommand  string
 	cmd                *exec.Cmd
 	exitFilePath       string
+	managed            bool
+	shutdown           chan struct{}
+	stopped            chan struct{}
 }
 
 func (j *JMXFetch) setDefaults() {
@@ -92,22 +97,22 @@ func (j *JMXFetch) setDefaults() {
 }
 
 // Start starts the JMXFetch process
-func (j *JMXFetch) Start() error {
+func (j *JMXFetch) Start(manage bool) error {
 	j.setDefaults()
 
 	here, _ := executable.Folder()
 	classpath := filepath.Join(common.GetDistPath(), "jmx", jmxJarName)
 	if j.JavaToolsJarPath != "" {
-		classpath = fmt.Sprintf("%s:%s", j.JavaToolsJarPath, classpath)
+		classpath = fmt.Sprintf("%s%s%s", j.JavaToolsJarPath, string(os.PathListSeparator), classpath)
 	}
 
 	globalCustomJars := config.Datadog.GetStringSlice("jmx_custom_jars")
 	if len(globalCustomJars) > 0 {
-		classpath = fmt.Sprintf("%s:%s", strings.Join(globalCustomJars, ":"), classpath)
+		classpath = fmt.Sprintf("%s%s%s", strings.Join(globalCustomJars, string(os.PathListSeparator)), string(os.PathListSeparator), classpath)
 	}
 
 	if len(j.JavaCustomJarPaths) > 0 {
-		classpath = fmt.Sprintf("%s:%s", strings.Join(j.JavaCustomJarPaths, ":"), classpath)
+		classpath = fmt.Sprintf("%s%s%s", strings.Join(j.JavaCustomJarPaths, string(os.PathListSeparator)), string(os.PathListSeparator), classpath)
 	}
 	bindHost := config.Datadog.GetString("bind_host")
 	if bindHost == "" || bindHost == "0.0.0.0" {
@@ -171,6 +176,10 @@ func (j *JMXFetch) Start() error {
 		"--ipc_host", ipcHost,
 		"--ipc_port", fmt.Sprintf("%v", ipcPort),
 		"--check_period", fmt.Sprintf("%v", int(check.DefaultCheckInterval/time.Millisecond)), // Period of the main loop of jmxfetch in ms
+		"--thread_pool_size", fmt.Sprintf("%v", config.Datadog.GetInt("jmx_thread_pool_size")), // Size for the JMXFetch thread pool
+		"--collection_timeout", fmt.Sprintf("%v", config.Datadog.GetInt("jmx_collection_timeout")), // Timeout for metric collection in seconds
+		"--reconnection_timeout", fmt.Sprintf("%v", config.Datadog.GetInt("jmx_reconnection_timeout")), // Timeout for instance reconnection in seconds
+		"--reconnection_thread_pool_size", fmt.Sprintf("%v", config.Datadog.GetInt("jmx_reconnection_thread_pool_size")), // Size for the JMXFetch reconnection thread pool
 		"--log_level", jmxLogLevel,
 		"--reporter", reporter, // Reporter to use
 	)
@@ -223,17 +232,53 @@ func (j *JMXFetch) Start() error {
 
 	log.Debugf("Args: %v", subprocessArgs)
 
-	return j.cmd.Start()
+	err = j.cmd.Start()
+
+	// start syncrhonization channels
+	if err == nil && manage {
+		j.managed = true
+		j.shutdown = make(chan struct{})
+		j.stopped = make(chan struct{})
+
+		go j.Monitor()
+	}
+
+	return err
 }
 
-// Kill kills the JMXFetch process
-func (j *JMXFetch) Kill() error {
+// Stop stops the JMXFetch process
+func (j *JMXFetch) Stop() error {
+	var stopChan chan struct{}
+
 	if j.JmxExitFile == "" {
 		// Unix
-		err := j.cmd.Process.Signal(os.Kill)
+		err := j.cmd.Process.Signal(syscall.SIGTERM)
 		if err != nil {
 			return err
 		}
+
+		if j.managed {
+			stopChan = j.stopped
+			close(j.shutdown)
+		} else {
+			stopChan = make(chan struct{})
+
+			go func() {
+				j.Wait()
+				close(stopChan)
+			}()
+		}
+
+		select {
+		case <-time.After(time.Millisecond * 500):
+			log.Warnf("Jmxfetch did not exit during it's grace period, killing it")
+			err = j.cmd.Process.Signal(os.Kill)
+			if err != nil {
+				log.Warnf("Could not kill jmxfetch: %v", err)
+			}
+		case <-stopChan:
+		}
+
 	} else {
 		// Windows
 		if err := ioutil.WriteFile(j.exitFilePath, nil, 0644); err != nil {
@@ -246,4 +291,31 @@ func (j *JMXFetch) Kill() error {
 // Wait waits for the end of the JMXFetch process and returns the error code
 func (j *JMXFetch) Wait() error {
 	return j.cmd.Wait()
+}
+
+func (j *JMXFetch) heartbeat(beat *time.Ticker) {
+	health := health.Register("jmxfetch")
+	defer health.Deregister()
+
+	for range beat.C {
+		select {
+		case <-health.C:
+		case <-j.shutdown:
+			return
+		}
+	}
+}
+
+// Up returns if JMXFetch is up - used by healthcheck
+func (j *JMXFetch) Up() (bool, error) {
+	// TODO: write windows implementation
+	process, err := os.FindProcess(j.cmd.Process.Pid)
+	if err != nil {
+		return false, fmt.Errorf("Failed to find process: %s\n", err)
+	}
+
+	// from man kill(2):
+	// if sig is 0, then no signal is sent, but error checking is still performed
+	err = process.Signal(syscall.Signal(0))
+	return err == nil, err
 }

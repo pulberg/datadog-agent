@@ -1,11 +1,15 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
+
+// +build kubelet
 
 package kubelet
 
 import (
+	"encoding/json"
+	"io/ioutil"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,4 +36,17 @@ process_cpu_seconds_total 127923.04
 	metric, err = ParseMetricFromRaw(rawData, "process_cpu_seconds_total")
 	assert.Empty(t, err)
 	assert.Equal(t, "process_cpu_seconds_total 127923.04", metric)
+}
+
+func loadPodsFixture(path string) ([]*Pod, error) {
+	raw, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var podList PodList
+	err = json.Unmarshal(raw, &podList)
+	if err != nil {
+		return nil, err
+	}
+	return podList.Items, nil
 }

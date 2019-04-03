@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build cpython
 
@@ -10,7 +10,7 @@ package py
 import (
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 
-	"github.com/DataDog/datadog-agent/pkg/util/docker"
+	"github.com/DataDog/datadog-agent/pkg/util/containers"
 )
 
 // #cgo pkg-config: python-2.7
@@ -20,9 +20,7 @@ import (
 // #include <Python.h>
 import "C"
 
-// TODO: move filter to `pkg/util/containers`
-// It does not require the docker build tag though
-var filter *docker.Filter
+var filter *containers.Filter
 
 // IsContainerExcluded returns whether a container should be excluded,
 // based on it's name and image name. Exclusion patterns are configured
@@ -52,7 +50,7 @@ func initContainers() {
 // Separated to unit testing
 func initContainerFilter() {
 	var err error
-	filter, err = docker.NewFilterFromConfig()
+	filter, err = containers.GetSharedFilter()
 	if err != nil {
 		log.Errorf("Error initializing container filtering: %s", err)
 	}

@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package log
 
@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-//Replacer structure to store regex matching and replacement functions
+// Replacer structure to store regex matching and replacement functions
 type Replacer struct {
 	Regex    *regexp.Regexp
 	Hints    []string // If any of these hints do not exist in the line, then we know the regex wont match either
@@ -23,7 +23,7 @@ type Replacer struct {
 	ReplFunc func(b []byte) []byte
 }
 
-var apiKeyReplacer, dockerAPIKeyReplacer, uriPasswordReplacer, passwordReplacer, tokenReplacer, snmpReplacer Replacer
+var apiKeyReplacer, uriPasswordReplacer, appKeyReplacer, passwordReplacer, tokenReplacer, snmpReplacer Replacer
 var commentRegex = regexp.MustCompile(`^\s*#.*$`)
 var blankRegex = regexp.MustCompile(`^\s*$`)
 
@@ -31,12 +31,16 @@ var replacers []Replacer
 
 func init() {
 	apiKeyReplacer := Replacer{
-		Regex: regexp.MustCompile(`[a-fA-F0-9]{27}([a-fA-F0-9]{5})`),
+		Regex: regexp.MustCompile(`\b[a-fA-F0-9]{27}([a-fA-F0-9]{5})\b`),
 		Repl:  []byte(`***************************$1`),
 	}
+	appKeyReplacer := Replacer{
+		Regex: regexp.MustCompile(`\b[a-fA-F0-9]{35}([a-fA-F0-9]{5})\b`),
+		Repl:  []byte(`***********************************$1`),
+	}
 	uriPasswordReplacer = Replacer{
-		Regex: regexp.MustCompile(`\:\/\/([A-Za-z0-9_]+)\:(.+)\@`),
-		Repl:  []byte(`://$1:********@`),
+		Regex: regexp.MustCompile(`([A-Za-z]+\:\/\/|\b)([A-Za-z0-9_]+)\:([^\s-]+)\@`),
+		Repl:  []byte(`$1$2:********@`),
 	}
 	passwordReplacer = Replacer{
 		Regex: matchYAMLKeyPart(`pass(word)?`),
@@ -53,7 +57,7 @@ func init() {
 		Hints: []string{"community_string", "authKey", "privKey"},
 		Repl:  []byte(`$1 ********`),
 	}
-	replacers = []Replacer{apiKeyReplacer, uriPasswordReplacer, passwordReplacer, tokenReplacer, snmpReplacer}
+	replacers = []Replacer{apiKeyReplacer, appKeyReplacer, uriPasswordReplacer, passwordReplacer, tokenReplacer, snmpReplacer}
 }
 
 func matchYAMLKeyPart(part string) *regexp.Regexp {
@@ -64,7 +68,7 @@ func matchYAMLKey(key string) *regexp.Regexp {
 	return regexp.MustCompile(fmt.Sprintf(`(\s*%s\s*:).+`, key))
 }
 
-//CredentialsCleanerFile scrubs credentials from file in path
+// CredentialsCleanerFile scrubs credentials from file in path
 func CredentialsCleanerFile(filePath string) ([]byte, error) {
 	file, err := os.Open(filePath)
 	defer file.Close()
@@ -74,7 +78,7 @@ func CredentialsCleanerFile(filePath string) ([]byte, error) {
 	return credentialsCleaner(file)
 }
 
-//CredentialsCleanerBytes scrubs credentials from slice of bytes
+// CredentialsCleanerBytes scrubs credentials from slice of bytes
 func CredentialsCleanerBytes(file []byte) ([]byte, error) {
 	r := bytes.NewReader(file)
 	return credentialsCleaner(r)

@@ -2,7 +2,6 @@
 NOTE: Changes made to this template should be reflected on the following templates, if applicable:
 * cmd/agent/gui/views/templates/collectorStatus.tmpl
 * cmd/agent/gui/views/templates/singleCheck.tmpl
-* Dockerfiles/cluster-agent/dist/templates/collector.tmpl
 */}}=========
 Collector
 =========
@@ -14,14 +13,17 @@ Collector
     No checks have run yet
   {{end -}}
 
-  {{- range .Checks}}
-    {{.CheckName}}
-    {{printDashes .CheckName "-"}}
-      Total Runs: {{.TotalRuns}}
-      Metric Samples: {{.MetricSamples}}, Total: {{humanize .TotalMetricSamples}}
-      Events: {{.Events}}, Total: {{humanize .TotalEvents}}
-      Service Checks: {{.ServiceChecks}}, Total: {{humanize .TotalServiceChecks}}
-      Average Execution Time : {{.AverageExecutionTime}}ms
+  {{- range $CheckName, $CheckInstances := .Checks}}
+    {{ $version := version $CheckInstances }}
+    {{$CheckName}}{{ if $version }} ({{$version}}){{ end }}
+    {{printDashes $CheckName "-"}}{{- if $version }}{{printDashes $version "-"}}---{{ end }}
+    {{- range $CheckInstances }}
+      Instance ID: {{.CheckID}} {{status .}}
+      Total Runs: {{humanize .TotalRuns}}
+      Metric Samples: Last Run: {{humanize .MetricSamples}}, Total: {{humanize .TotalMetricSamples}}
+      Events: Last Run: {{humanize .Events}}, Total: {{humanize .TotalEvents}}
+      Service Checks: Last Run: {{humanize .ServiceChecks}}, Total: {{humanize .TotalServiceChecks}}
+      Average Execution Time : {{humanizeDuration .AverageExecutionTime "ms"}}
       {{if .LastError -}}
       Error: {{lastErrorMessage .LastError}}
       {{lastErrorTraceback .LastError -}}
@@ -31,7 +33,26 @@ Collector
       Warning: {{.}}
         {{ end -}}
       {{- end }}
-  {{ end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
+{{- with .pyLoaderStats }}
+  {{- if .ConfigureErrors }}
+  Check Initialization Errors
+  ===========================
+
+    {{ range $CheckName, $errors :=  .ConfigureErrors }}
+      {{ $CheckName }}
+      {{printDashes $CheckName "-"}}
+      {{- range $idx, $err := $errors}}
+
+      instance {{$idx}}:
+
+        {{ doNotEscape $err }}
+      {{- end }}
+    {{- end}}
+  {{- end }}
 {{- end }}
 
 {{- with .AutoConfigStats }}
@@ -44,7 +65,9 @@ Collector
       {{ configError $error }}
     {{- end }}
   {{- end}}
+{{- end }}
 
+{{- with .CheckSchedulerStats }}
   {{- if .LoaderErrors}}
   Loading Errors
   ==============
@@ -54,7 +77,7 @@ Collector
       {{- range $kind, $err := $errors -}}
         {{- if eq $kind "Python Check Loader" }}
       {{$kind}}:
-        {{ pythonLoaderError $err }}
+        {{ doNotEscape $err }}
         {{ else }}
       {{$kind}}:
         {{ doNotEscape $err }}

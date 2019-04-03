@@ -1,14 +1,14 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package app
 
 import (
+	"context"
 	"fmt"
 	"runtime"
-	"syscall"
 	"time"
 
 	_ "expvar" // Blank import used because this isn't directly used in this file
@@ -16,13 +16,15 @@ import (
 	_ "net/http/pprof" // Blank import used because this isn't directly used in this file
 
 	"os"
-	"os/signal"
+
+	"github.com/spf13/cobra"
 
 	"github.com/DataDog/datadog-agent/cmd/agent/api"
 	"github.com/DataDog/datadog-agent/cmd/agent/common"
-	"github.com/DataDog/datadog-agent/cmd/agent/common/signals"
 	"github.com/DataDog/datadog-agent/cmd/agent/gui"
 	"github.com/DataDog/datadog-agent/pkg/aggregator"
+	"github.com/DataDog/datadog-agent/pkg/api/healthprobe"
+	"github.com/DataDog/datadog-agent/pkg/collector/corechecks/embed/jmx"
 	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/dogstatsd"
 	"github.com/DataDog/datadog-agent/pkg/forwarder"
@@ -31,16 +33,16 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/metadata/host"
 	"github.com/DataDog/datadog-agent/pkg/pidfile"
 	"github.com/DataDog/datadog-agent/pkg/serializer"
+	"github.com/DataDog/datadog-agent/pkg/status/health"
 	"github.com/DataDog/datadog-agent/pkg/util"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 	"github.com/DataDog/datadog-agent/pkg/version"
-	"github.com/spf13/cobra"
 
 	// register core checks
 	_ "github.com/DataDog/datadog-agent/pkg/collector/corechecks/cluster"
 	_ "github.com/DataDog/datadog-agent/pkg/collector/corechecks/containers"
 	_ "github.com/DataDog/datadog-agent/pkg/collector/corechecks/embed"
-	_ "github.com/DataDog/datadog-agent/pkg/collector/corechecks/network"
+	_ "github.com/DataDog/datadog-agent/pkg/collector/corechecks/net"
 	_ "github.com/DataDog/datadog-agent/pkg/collector/corechecks/system"
 
 	// register metadata providers
@@ -50,27 +52,11 @@ import (
 
 var (
 	startCmd = &cobra.Command{
-		Use:   "start",
-		Short: "Start the Agent",
-		Long:  `Runs the agent in the foreground`,
-		RunE:  start,
+		Use:        "start",
+		Deprecated: "Use \"run\" instead to start the Agent",
+		RunE:       start,
 	}
 )
-
-var (
-	// flags variables
-	runForeground bool
-	pidfilePath   string
-)
-
-// run the host metadata collector every 14400 seconds (4 hours)
-const hostMetadataCollectorInterval = 14400
-
-// run the agent checks metadata collector every 600 seconds (10 minutes)
-const agentChecksMetadataCollectorInterval = 600
-
-// run the resources metadata collector every 300 seconds (5 minutes) by default, configurable
-const defaultResourcesMetadataCollectorInterval = 300
 
 func init() {
 	// attach the command to the root
@@ -82,75 +68,56 @@ func init() {
 
 // Start the main loop
 func start(cmd *cobra.Command, args []string) error {
-	defer func() {
-		StopAgent()
-	}()
-
-	// Setup a channel to catch OS signals
-	signalCh := make(chan os.Signal, 1)
-	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
-
-	// Make a channel to exit the function
-	stopCh := make(chan error)
-
-	go func() {
-		// Set up the signals async so we can Start the agent
-		select {
-		case <-signals.Stopper:
-			log.Info("Received stop command, shutting down...")
-			stopCh <- nil
-		case <-signals.ErrorStopper:
-			log.Critical("The Agent has encountered an error, shutting down...")
-			stopCh <- fmt.Errorf("shutting down because of an error")
-		case sig := <-signalCh:
-			log.Infof("Received signal '%s', shutting down...", sig)
-			stopCh <- nil
-		}
-	}()
-
-	if err := StartAgent(); err != nil {
-		return err
-	}
-
-	select {
-	case err := <-stopCh:
-		return err
-	}
+	return run(cmd, args)
 }
 
 // StartAgent Initializes the agent process
 func StartAgent() error {
+	// Main context passed to components
+	common.MainCtx, common.MainCtxCancel = context.WithCancel(context.Background())
 
 	// Global Agent configuration
 	err := common.SetupConfig(confFilePath)
 	if err != nil {
+		log.Errorf("Failed to setup config %v", err)
 		return fmt.Errorf("unable to set up global agent configuration: %v", err)
 	}
 
 	// Setup logger
-	syslogURI := config.GetSyslogURI()
-	logFile := config.Datadog.GetString("log_file")
-	if logFile == "" {
-		logFile = common.DefaultLogFile
-	}
+	if runtime.GOOS != "android" {
+		syslogURI := config.GetSyslogURI()
+		logFile := config.Datadog.GetString("log_file")
+		if logFile == "" {
+			logFile = common.DefaultLogFile
+		}
 
-	if config.Datadog.GetBool("disable_file_logging") {
-		// this will prevent any logging on file
-		logFile = ""
-	}
+		if config.Datadog.GetBool("disable_file_logging") {
+			// this will prevent any logging on file
+			logFile = ""
+		}
 
-	err = config.SetupLogger(
-		config.Datadog.GetString("log_level"),
-		logFile,
-		syslogURI,
-		config.Datadog.GetBool("syslog_rfc"),
-		config.Datadog.GetBool("syslog_tls"),
-		config.Datadog.GetString("syslog_pem"),
-		config.Datadog.GetBool("log_to_console"),
-		config.Datadog.GetBool("log_format_json"),
-	)
+		err = config.SetupLogger(
+			loggerName,
+			config.Datadog.GetString("log_level"),
+			logFile,
+			syslogURI,
+			config.Datadog.GetBool("syslog_rfc"),
+			config.Datadog.GetBool("log_to_console"),
+			config.Datadog.GetBool("log_format_json"),
+		)
+	} else {
+		err = config.SetupLogger(
+			loggerName,
+			config.Datadog.GetString("log_level"),
+			"", // no log file on android
+			"", // no syslog on android,
+			false,
+			true,  // always log to console
+			false, // not in json
+		)
+	}
 	if err != nil {
-		return log.Errorf("Error while setting up logging, exiting: %v", err)
+		return fmt.Errorf("Error while setting up logging, exiting: %v", err)
 	}
 
 	log.Infof("Starting Datadog Agent v%v", version.AgentVersion)
@@ -158,6 +125,16 @@ func StartAgent() error {
 	// Setup expvar server
 	var port = config.Datadog.GetString("expvar_port")
 	go http.ListenAndServe("127.0.0.1:"+port, http.DefaultServeMux)
+
+	// Setup healthcheck port
+	var healthPort = config.Datadog.GetInt("health_port")
+	if healthPort > 0 {
+		err := healthprobe.Serve(common.MainCtx, healthPort)
+		if err != nil {
+			return log.Errorf("Error starting health port, exiting: %v", err)
+		}
+		log.Debugf("Health check listening on port %d", healthPort)
+	}
 
 	if pidfilePath != "" {
 		err = pidfile.WritePID(pidfilePath)
@@ -181,8 +158,10 @@ func StartAgent() error {
 	}
 
 	// start the cmd HTTP server
-	if err = api.StartServer(); err != nil {
-		return log.Errorf("Error while starting api server, exiting: %v", err)
+	if runtime.GOOS != "android" {
+		if err = api.StartServer(); err != nil {
+			return log.Errorf("Error while starting api server, exiting: %v", err)
+		}
 	}
 
 	// start the GUI server
@@ -204,14 +183,14 @@ func StartAgent() error {
 	log.Debugf("Forwarder started")
 
 	// setup the aggregator
-	s := &serializer.Serializer{Forwarder: common.Forwarder}
-	agg := aggregator.InitAggregator(s, hostname)
+	s := serializer.NewSerializer(common.Forwarder)
+	agg := aggregator.InitAggregator(s, hostname, "agent")
 	agg.AddAgentStartupEvent(version.AgentVersion)
 
 	// start dogstatsd
 	if config.Datadog.GetBool("use_dogstatsd") {
 		var err error
-		common.DSD, err = dogstatsd.NewServer(agg.GetChannels())
+		common.DSD, err = dogstatsd.NewServer(agg.GetBufferedChannels())
 		if err != nil {
 			log.Errorf("Could not start dogstatsd: %s", err)
 		}
@@ -302,7 +281,18 @@ func setupMetadataCollection(s *serializer.Serializer, hostname string) error {
 
 // StopAgent Tears down the agent process
 func StopAgent() {
+	// retrieve the agent health before stopping the components
+	// GetStatusNonBlocking has a 100ms timeout to avoid blocking
+	health, err := health.GetStatusNonBlocking()
+	if err != nil {
+		log.Warnf("Agent health unknown: %s", err)
+	} else if len(health.Unhealthy) > 0 {
+		log.Warnf("Some components were unhealthy: %v", health.Unhealthy)
+	}
+
 	// gracefully shut down any component
+	common.MainCtxCancel()
+
 	if common.DSD != nil {
 		common.DSD.Stop()
 	}
@@ -313,6 +303,7 @@ func StopAgent() {
 		common.MetadataScheduler.Stop()
 	}
 	api.StopServer()
+	jmx.StopJmxfetch()
 	if common.Forwarder != nil {
 		common.Forwarder.Stop()
 	}

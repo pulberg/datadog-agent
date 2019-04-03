@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package processor
 
@@ -36,8 +36,8 @@ func TestRawEncoder(t *testing.T) {
 
 	rawMessage := "message"
 	msg := newMessage([]byte(rawMessage), source, message.StatusError)
-	msg.GetOrigin().LogSource = source
-	msg.GetOrigin().SetTags([]string{"a", "b:c"})
+	msg.Origin.LogSource = source
+	msg.Origin.SetTags([]string{"a", "b:c"})
 
 	redactedMessage := "redacted"
 
@@ -127,8 +127,8 @@ func TestProtoEncoder(t *testing.T) {
 
 	rawMessage := "message"
 	msg := newMessage([]byte(rawMessage), source, message.StatusError)
-	msg.GetOrigin().LogSource = source
-	msg.GetOrigin().SetTags([]string{"a", "b:c"})
+	msg.Origin.LogSource = source
+	msg.Origin.SetTags([]string{"a", "b:c"})
 
 	redactedMessage := "redacted"
 
@@ -143,7 +143,7 @@ func TestProtoEncoder(t *testing.T) {
 
 	assert.Equal(t, logsConfig.Service, log.Service)
 	assert.Equal(t, logsConfig.Source, log.Source)
-	assert.Equal(t, []string{"a", "b:c", "source:" + logsConfig.Source, "sourcecategory:" + logsConfig.SourceCategory, "foo:bar", "baz"}, log.Tags)
+	assert.Equal(t, []string{"a", "b:c", "sourcecategory:" + logsConfig.SourceCategory, "foo:bar", "baz"}, log.Tags)
 
 	assert.Equal(t, redactedMessage, log.Message)
 	assert.Equal(t, message.StatusError, log.Status)
@@ -181,8 +181,18 @@ func TestProtoEncoderEmpty(t *testing.T) {
 
 }
 
-func TestProtoEncoderInvalidUTF8(t *testing.T) {
-	msg, err := protoEncoder.encode(nil, []byte("\xde\xea\xca\xfe"))
-	assert.Nil(t, msg)
-	assert.Error(t, err)
+func TestProtoEncoderHandleInvalidUTF8(t *testing.T) {
+	cfg := &config.LogsConfig{}
+	src := config.NewLogSource("", cfg)
+	msg := newMessage([]byte(""), src, "")
+	encoded, err := protoEncoder.encode(msg, []byte("a\xfez"))
+	assert.NotNil(t, encoded)
+	assert.Nil(t, err)
+}
+
+func TestProtoEncoderToValidUTF8(t *testing.T) {
+	assert.Equal(t, "a�z", protoEncoder.toValidUtf8([]byte("a\xfez")))
+	assert.Equal(t, "a��z", protoEncoder.toValidUtf8([]byte("a\xc0\xafz")))
+	assert.Equal(t, "a���z", protoEncoder.toValidUtf8([]byte("a\xed\xa0\x80z")))
+	assert.Equal(t, "a����z", protoEncoder.toValidUtf8([]byte("a\xf0\x8f\xbf\xbfz")))
 }

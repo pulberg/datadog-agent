@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package flare
 
@@ -19,10 +19,19 @@ import (
 
 func TestMkURL(t *testing.T) {
 	common.SetupConfig("./test")
-	config.Datadog.Set("dd_url", "https://example.com")
-	config.Datadog.Set("api_key", "123456")
-	assert.Equal(t, "https://example.com/support/flare/999?api_key=123456", mkURL("999"))
-	assert.Equal(t, "https://example.com/support/flare?api_key=123456", mkURL(""))
+	mockConfig := config.Mock()
+	mockConfig.Set("dd_url", "https://example.com")
+	mockConfig.Set("api_key", "123456")
+	expectedURLBase, _ := config.AddAgentVersionToDomain("https://example.com/", "flare")
+	assert.Equal(t, expectedURLBase+"support/flare/999?api_key=123456", mkURL("999"))
+	assert.Equal(t, expectedURLBase+"support/flare?api_key=123456", mkURL(""))
+
+	mockConfig.Set("site", "datadoghq.eu")
+	mockConfig.Set("dd_url", "")
+	mockConfig.Set("api_key", "123456")
+	expectedURLBase, _ = config.AddAgentVersionToDomain("https://app.datadoghq.eu/", "flare")
+	assert.Equal(t, expectedURLBase+"support/flare/999?api_key=123456", mkURL("999"))
+	assert.Equal(t, expectedURLBase+"support/flare?api_key=123456", mkURL(""))
 }
 
 func TestFlareHasRightForm(t *testing.T) {
@@ -39,7 +48,8 @@ func TestFlareHasRightForm(t *testing.T) {
 
 	ddURL := ts.URL
 
-	config.Datadog.Set("dd_url", ddURL)
+	mockConfig := config.Mock()
+	mockConfig.Set("dd_url", ddURL)
 
 	archivePath := "./test/blank.zip"
 	caseID := "12345"

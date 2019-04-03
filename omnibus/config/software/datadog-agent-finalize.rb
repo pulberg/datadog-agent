@@ -1,7 +1,7 @@
 # Unless explicitly stated otherwise all files in this repository are licensed
 # under the Apache License Version 2.0.
 # This product includes software developed at Datadog (https:#www.datadoghq.com/).
-# Copyright 2018 Datadog, Inc.
+# Copyright 2016-2019 Datadog, Inc.
 
 # This software definition doesn"t build anything, it"s the place where we create
 # files outside the omnibus installation directory, so that we can add them to
@@ -23,7 +23,6 @@ build do
             conf_dir = "#{conf_dir_root}/extra_package_files/EXAMPLECONFSLOCATION"
             mkdir conf_dir
             move "#{install_dir}/etc/datadog-agent/datadog.yaml.example", conf_dir_root, :force=>true
-            delete "#{install_dir}/etc/datadog-agent/trace-agent.conf.example"
             move "#{install_dir}/etc/datadog-agent/conf.d/*", conf_dir, :force=>true
             delete "#{install_dir}/bin/agent/agent.exe"
             # TODO why does this get generated at all
@@ -46,21 +45,30 @@ build do
             move "#{install_dir}/scripts/datadog-agent.conf", "/etc/init"
             move "#{install_dir}/scripts/datadog-agent-trace.conf", "/etc/init"
             move "#{install_dir}/scripts/datadog-agent-process.conf", "/etc/init"
+            move "#{install_dir}/scripts/datadog-agent-network.conf", "/etc/init"
             systemd_directory = "/usr/lib/systemd/system"
             if debian?
                 # debian recommends using a different directory for systemd unit files
                 systemd_directory = "/lib/systemd/system"
+
+                # sysvinit support for debian only for now
+                mkdir "/etc/init.d"
+                move "#{install_dir}/scripts/datadog-agent", "/etc/init.d"
+                move "#{install_dir}/scripts/datadog-agent-trace", "/etc/init.d"
+                move "#{install_dir}/scripts/datadog-agent-process", "/etc/init.d"
+                move "#{install_dir}/scripts/datadog-agent-network", "/etc/init.d"
             end
             mkdir systemd_directory
             move "#{install_dir}/scripts/datadog-agent.service", systemd_directory
             move "#{install_dir}/scripts/datadog-agent-trace.service", systemd_directory
             move "#{install_dir}/scripts/datadog-agent-process.service", systemd_directory
+            move "#{install_dir}/scripts/datadog-agent-network.service", systemd_directory
 
             # Move checks and configuration files
             mkdir "/etc/datadog-agent"
             move "#{install_dir}/bin/agent/dd-agent", "/usr/bin/dd-agent"
             move "#{install_dir}/etc/datadog-agent/datadog.yaml.example", "/etc/datadog-agent"
-            delete "#{install_dir}/etc/datadog-agent/trace-agent.conf.example"
+            move "#{install_dir}/etc/datadog-agent/network-tracer.yaml.example", "/etc/datadog-agent"
             move "#{install_dir}/etc/datadog-agent/conf.d", "/etc/datadog-agent", :force=>true
 
             # Create empty directories so that they're owned by the package
@@ -83,10 +91,7 @@ build do
             # remove windows specific configs
             delete "#{install_dir}/etc/conf.d/winproc.d"
 
-            delete "#{install_dir}/etc/trace-agent.conf.example"
-
             # Nothing to move on osx, the confs already live in /opt/datadog-agent/etc/
         end
     end
 end
-

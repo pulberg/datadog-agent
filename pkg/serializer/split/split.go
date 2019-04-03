@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package split
 
@@ -27,40 +27,54 @@ const (
 	Marshal
 )
 
-var splitterExpvar = expvar.NewMap("splitter")
+var (
+	splitterExpvars      = expvar.NewMap("splitter")
+	splitterNotTooBig    = expvar.Int{}
+	splitterTooBig       = expvar.Int{}
+	splitterTotalLoops   = expvar.Int{}
+	splitterPayloadDrops = expvar.Int{}
+)
+
+func init() {
+	splitterExpvars.Set("NotTooBig", &splitterNotTooBig)
+	splitterExpvars.Set("TooBig", &splitterTooBig)
+	splitterExpvars.Set("TotalLoops", &splitterTotalLoops)
+	splitterExpvars.Set("PayloadDrops", &splitterPayloadDrops)
+
+}
 
 // CheckSizeAndSerialize Check the size of a payload and marshall it (optionally compress it)
 // The dual role makes sense as you will never serialize without checking the size of the payload
-func CheckSizeAndSerialize(m marshaler.Marshaler, compress bool, mType MarshalType) (bool, []byte, error) {
-	payload, _, err := serializeMarshaller(m, compress, mType)
+func CheckSizeAndSerialize(m marshaler.Marshaler, compress bool, mType MarshalType) (bool, []byte, []byte, error) {
+	compressedPayload, payload, err := serializeMarshaller(m, compress, mType)
 	if err != nil {
-		return false, nil, err
+		return false, nil, nil, err
 	}
-	return checkSize(payload), payload, nil
+	return checkSize(compressedPayload), compressedPayload, payload, nil
 }
 
 // Payloads serializes a metadata payload and sends it to the forwarder
 func Payloads(m marshaler.Marshaler, compress bool, mType MarshalType) (forwarder.Payloads, error) {
 	marshallers := []marshaler.Marshaler{m}
 	smallEnoughPayloads := forwarder.Payloads{}
-	nottoobig, payload, err := CheckSizeAndSerialize(m, compress, mType)
+	nottoobig, payload, _, err := CheckSizeAndSerialize(m, compress, mType)
 	if err != nil {
 		return smallEnoughPayloads, err
 	}
 	// If the payload's size is fine, just return it
 	if nottoobig {
 		log.Debug("The payload was not too big, returning the full payload")
-		splitterExpvar.Add("NotTooBig", 1)
+		splitterNotTooBig.Add(1)
 		smallEnoughPayloads = append(smallEnoughPayloads, &payload)
 		return smallEnoughPayloads, nil
 	}
-	splitterExpvar.Add("TooBig", 1)
+	splitterTooBig.Add(1)
 	toobig := !nottoobig
 	loops := 0
 	// Do not attempt to split payloads forever, if a payload cannot be split then abandon the task
 	// the function will return all the payloads that were able to be split
 	for toobig && loops < 3 {
-		splitterExpvar.Add("TotalLoops", 1)
+		splitterTotalLoops.Add(1)
 		// create a temporary slice, the other array will be reused to keep track of the payloads that have yet to be split
 		tempSlice := make([]marshaler.Marshaler, len(marshallers))
 		copy(tempSlice, marshallers)
@@ -78,16 +92,18 @@ func Payloads(m marshaler.Marshaler, compress bool, mType MarshalType) (forwarde
 			// This is the same function used in dd-agent
 			compressionRatio := float64(payloadSize) / float64(compressedSize)
 			numChunks := compressedSize/maxPayloadSize + 1 + int(compressionRatio/2)
-			log.Debugf("split the payload into into %f chunks", numChunks)
+			log.Debugf("split the payload into into %d chunks", numChunks)
 			chunks, err := toSplit.SplitPayload(numChunks)
-			log.Debugf("payload was split into %f chunks", len(chunks))
+			log.Debugf("payload was split into %d chunks", len(chunks))
 			if err != nil {
+				log.Warnf("Some payloads could not be split, dropping them")
+				splitterPayloadDrops.Add(1)
 				return smallEnoughPayloads, err
 			}
 			// after the payload has been split, loop through the chunks
 			for _, chunk := range chunks {
 				// serialize the payload
-				smallEnough, payload, err := CheckSizeAndSerialize(chunk, compress, mType)
+				smallEnough, payload, _, err := CheckSizeAndSerialize(chunk, compress, mType)
 				if err != nil {
 					log.Debugf("Error serializing a chunk: %s", err)
 					continue
@@ -110,6 +126,10 @@ func Payloads(m marshaler.Marshaler, compress bool, mType MarshalType) (forwarde
 			log.Debug("marshallers was not empty, running around the loop again")
 			loops++
 		}
+	}
+	if len(marshallers) != 0 {
+		log.Warnf("Some payloads could not be split, dropping them")
+		splitterPayloadDrops.Add(1)
 	}
 
 	return smallEnoughPayloads, nil
@@ -150,4 +170,9 @@ func marshal(m marshaler.Marshaler, mType MarshalType) ([]byte, error) {
 	default:
 		return m.MarshalJSON()
 	}
+}
+
+// GetPayloadDrops returns the number of times we dropped some payloads because we couldn't split them.
+func GetPayloadDrops() int64 {
+	return splitterPayloadDrops.Value()
 }

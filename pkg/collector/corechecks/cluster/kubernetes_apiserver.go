@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build kubeapiserver
 
@@ -10,21 +10,22 @@ package cluster
 import (
 	"errors"
 	"fmt"
-
-	"github.com/DataDog/datadog-agent/pkg/aggregator"
-	"github.com/DataDog/datadog-agent/pkg/collector/check"
-	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/apiserver/leaderelection"
-
-	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
-	core "github.com/DataDog/datadog-agent/pkg/collector/corechecks"
-	"github.com/DataDog/datadog-agent/pkg/config"
-	"github.com/DataDog/datadog-agent/pkg/metrics"
-	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/apiserver"
-	"github.com/DataDog/datadog-agent/pkg/util/log"
+	"time"
 
 	yaml "gopkg.in/yaml.v2"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/DataDog/datadog-agent/pkg/aggregator"
+	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
+	"github.com/DataDog/datadog-agent/pkg/collector/check"
+	core "github.com/DataDog/datadog-agent/pkg/collector/corechecks"
+	"github.com/DataDog/datadog-agent/pkg/config"
+	"github.com/DataDog/datadog-agent/pkg/metrics"
+	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/apiserver"
+	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/apiserver/leaderelection"
+	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/clustername"
+	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
 // Covers the Control Plane service check and the in memory pod metadata.
@@ -36,9 +37,10 @@ const (
 
 // KubeASConfig is the config of the API server.
 type KubeASConfig struct {
-	Tags              []string `yaml:"tags"`
-	CollectEvent      bool     `yaml:"collect_events"`
-	FilteredEventType []string `yaml:"filtered_event_types"`
+	CollectEvent             bool     `yaml:"collect_events"`
+	CollectOShiftQuotas      bool     `yaml:"collect_openshift_clusterquotas"`
+	FilteredEventType        []string `yaml:"filtered_event_types"`
+	EventCollectionTimeoutMs int      `yaml:"kubernetes_event_read_timeout_ms"`
 }
 
 // KubeASCheck grabs metrics and events from the API server.
@@ -49,19 +51,27 @@ type KubeASCheck struct {
 	latestEventToken      string
 	configMapAvailable    bool
 	ac                    *apiserver.APIClient
+	oshiftAPILevel        apiserver.OpenShiftAPILevel
 }
 
 func (c *KubeASConfig) parse(data []byte) error {
 	// default values
 	c.CollectEvent = config.Datadog.GetBool("collect_kubernetes_events")
+	c.CollectOShiftQuotas = true
+	c.EventCollectionTimeoutMs = config.Datadog.GetInt("kubernetes_event_collection_timeout")
 
 	return yaml.Unmarshal(data, c)
 }
 
 // Configure parses the check configuration and init the check.
 func (k *KubeASCheck) Configure(config, initConfig integration.Data) error {
+	err := k.CommonConfigure(config)
+	if err != nil {
+		return err
+	}
+
 	// Check connectivity to the APIServer
-	err := k.instance.parse(config)
+	err = k.instance.parse(config)
 	if err != nil {
 		log.Error("could not parse the config for the API server")
 		return err
@@ -77,13 +87,18 @@ func (k *KubeASCheck) Run() error {
 	if err != nil {
 		return err
 	}
+	defer sender.Commit()
+
+	if config.Datadog.GetBool("cluster_agent.enabled") {
+		log.Debug("Cluster agent is enabled. Not running Kubernetes API Server check or collecting Kubernetes Events.")
+		return nil
+	}
 
 	// Only run if Leader Election is enabled.
 	if !config.Datadog.GetBool("leader_election") {
 		k.Warn("Leader Election not enabled. Not running Kubernetes API Server check or collecting Kubernetes Events.")
 		return nil
 	}
-
 	errLeader := k.runLeaderElection()
 	if errLeader != nil {
 		if errLeader == apiserver.ErrNotLeader {
@@ -93,12 +108,18 @@ func (k *KubeASCheck) Run() error {
 		return err
 	}
 
+	// API Server client initialisation on first run
 	if k.ac == nil {
 		// We start the API Server Client.
 		k.ac, err = apiserver.GetAPIClient()
 		if err != nil {
 			k.Warn("Could not connect to apiserver: %s", err)
 			return err
+		}
+
+		// We detect OpenShift presence for quota collection
+		if k.instance.CollectOShiftQuotas {
+			k.oshiftAPILevel = k.ac.DetectOpenShiftAPILevel()
 		}
 	}
 
@@ -112,7 +133,16 @@ func (k *KubeASCheck) Run() error {
 			k.Warnf("Could not collect API Server component status: %s", err.Error())
 		}
 	}
-	defer sender.Commit()
+
+	// Running OpenShift ClusterResourceQuota collection if available
+	if k.instance.CollectOShiftQuotas && k.oshiftAPILevel != apiserver.NotOpenShift {
+		quotas, err := k.retrieveOShiftClusterQuotas()
+		if err != nil {
+			k.Warnf("Could not collect OpenShift cluster quotas: %s", err.Error())
+		} else {
+			k.reportClusterQuotas(quotas, sender)
+		}
+	}
 
 	// Running the event collection.
 	if !k.instance.CollectEvent {
@@ -167,10 +197,10 @@ func (k *KubeASCheck) runLeaderElection() error {
 	}
 
 	if !leaderEngine.IsLeader() {
-		log.Debugf("Leader is %q. %s will not run Kubernetes cluster related checks and collecting events", leaderEngine.CurrentLeaderName(), leaderEngine.HolderIdentity)
+		log.Debugf("Leader is %q. %s will not run Kubernetes cluster related checks and collecting events", leaderEngine.GetLeader(), leaderEngine.HolderIdentity)
 		return apiserver.ErrNotLeader
 	}
-	log.Tracef("Current leader: %q, running Kubernetes cluster related checks and collecting events", leaderEngine.CurrentLeaderName())
+	log.Tracef("Current leader: %q, running Kubernetes cluster related checks and collecting events", leaderEngine.GetLeader())
 	return nil
 }
 func (k *KubeASCheck) eventCollectionInit() {
@@ -197,7 +227,9 @@ func (k *KubeASCheck) eventCollectionInit() {
 }
 
 func (k *KubeASCheck) eventCollectionCheck() ([]*v1.Event, []*v1.Event, error) {
-	newEvents, modifiedEvents, versionToken, err := k.ac.LatestEvents(k.latestEventToken)
+	timeout := time.Duration(k.instance.EventCollectionTimeoutMs) * time.Millisecond
+
+	newEvents, modifiedEvents, versionToken, err := k.ac.LatestEvents(k.latestEventToken, timeout)
 	if err != nil {
 		k.Warnf("Could not collect events from the api server: %s", err.Error())
 		return nil, nil, err
@@ -205,7 +237,7 @@ func (k *KubeASCheck) eventCollectionCheck() ([]*v1.Event, []*v1.Event, error) {
 
 	if versionToken == "0" {
 		// API server cache expired or no recent events to process. Resetting the Resversion token.
-		_, _, versionToken, err = k.ac.LatestEvents("0")
+		_, _, versionToken, err = k.ac.LatestEvents("0", timeout)
 		if err != nil {
 			k.Warnf("Could not collect cached events from the api server: %s", err.Error())
 			return nil, nil, err
@@ -246,7 +278,7 @@ func (k *KubeASCheck) parseComponentStatus(sender aggregator.Sender, componentsS
 			log.Debug("API Server component's structure is not expected")
 			continue
 		}
-		tagComp := append(k.instance.Tags, fmt.Sprintf("component:%s", component.Name))
+		tagComp := []string{fmt.Sprintf("component:%s", component.Name)}
 		for _, condition := range component.Conditions {
 			status_check := metrics.ServiceCheckUnknown
 
@@ -300,13 +332,14 @@ ITER_EVENTS:
 			log.Debugf("Filtered out the following events: %s", formatStringIntMap(filteredByType))
 		}
 	}
+
+	clusterName := clustername.GetClusterName()
 	for _, bundle := range eventsByObject {
-		datadogEv, err := bundle.formatEvents(k.KubeAPIServerHostname, modified)
+		datadogEv, err := bundle.formatEvents(modified, clusterName)
 		if err != nil {
 			k.Warnf("Error while formatting bundled events, %s. Not submitting", err.Error())
 			continue
 		}
-		datadogEv.Tags = append(datadogEv.Tags, k.instance.Tags...)
 		sender.Event(datadogEv)
 	}
 	return nil

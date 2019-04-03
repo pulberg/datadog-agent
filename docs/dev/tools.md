@@ -19,7 +19,7 @@ curl http://localhost:5000/debug/pprof/goroutine?debug=2
 ```
 * Profile the go heap:
 ```sh
-go tool pprof http://localhost:6060/debug/pprof/heap
+go tool pprof http://localhost:5000/debug/pprof/heap
 ```
 
 ## expvar
@@ -48,7 +48,7 @@ A debugger for Go.
 
 Example usage:
 ```sh
-$ sudo dlv attach `pgrep -f '/opt/datadog-agent/bin/agent/agent start'`
+$ sudo dlv attach `pgrep -f '/opt/datadog-agent/bin/agent/agent run'`
 (dlv) help # help on all commands
 (dlv) goroutines # list goroutines
 (dlv) threads # list threads

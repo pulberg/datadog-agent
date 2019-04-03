@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package app
 
@@ -15,6 +15,8 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/api/util"
 	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/status"
+
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -36,20 +38,21 @@ var statusCmd = &cobra.Command{
 	Short: "Print the current status",
 	Long:  ``,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		err := common.SetupConfig(confFilePath)
+		err := common.SetupConfigWithoutSecrets(confFilePath)
 		if err != nil {
 			return fmt.Errorf("unable to set up global agent configuration: %v", err)
 		}
-		err = requestStatus()
-		if err != nil {
-			return err
+		if flagNoColor {
+			color.NoColor = true
 		}
-		return nil
+		return requestStatus()
 	},
 }
 
 func requestStatus() error {
-	fmt.Printf("Getting the status from the agent.\n\n")
+	if !prettyPrintJSON && !jsonStatus {
+		fmt.Printf("Getting the status from the agent.\n\n")
+	}
 	var e error
 	var s string
 	c := util.GetClient(false) // FIX: get certificates right then make this true

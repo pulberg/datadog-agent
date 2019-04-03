@@ -1,5 +1,7 @@
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build kubeapiserver
 
@@ -13,8 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/apiserver"
-	"github.com/DataDog/datadog-agent/pkg/util/log"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -22,6 +22,9 @@ import (
 	rl "k8s.io/client-go/tools/leaderelection/resourcelock"
 
 	"github.com/DataDog/datadog-agent/pkg/config"
+	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/apiserver"
+	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/apiserver/common"
+	"github.com/DataDog/datadog-agent/pkg/util/log"
 	"github.com/DataDog/datadog-agent/pkg/util/retry"
 )
 
@@ -44,22 +47,24 @@ type LeaderEngine struct {
 	m       sync.Mutex
 	once    sync.Once
 
-	HolderIdentity  string
-	LeaseDuration   time.Duration
-	LeaseName       string
-	LeaderNamespace string
-	coreClient      *corev1.CoreV1Client
-	leaderElector   *leaderelection.LeaderElector
+	HolderIdentity      string
+	LeaseDuration       time.Duration
+	LeaseName           string
+	LeaderNamespace     string
+	coreClient          corev1.CoreV1Interface
+	ServiceName         string
+	leaderIdentityMutex sync.RWMutex
+	leaderElector       *leaderelection.LeaderElector
 
-	currentHolderIdentity string
-	currentHolderMutex    sync.RWMutex
+	// leaderIdentity is the HolderIdentity of the current leader.
+	leaderIdentity string
 }
 
 func newLeaderEngine() *LeaderEngine {
-	leaderNamespace := apiserver.GetResourcesNamespace()
 	return &LeaderEngine{
 		LeaseName:       defaultLeaseName,
-		LeaderNamespace: leaderNamespace,
+		LeaderNamespace: common.GetResourcesNamespace(),
+		ServiceName:     config.Datadog.GetString("cluster_agent.kubernetes_service_name"),
 	}
 }
 
@@ -90,7 +95,7 @@ func GetCustomLeaderEngine(holderIdentity string, ttl time.Duration) (*LeaderEng
 	}
 	err := globalLeaderEngine.initRetry.TriggerRetry()
 	if err != nil {
-		log.Debugf("Init error: %s", err)
+		log.Debugf("Leader Election init error: %s", err)
 		return nil, err
 	}
 	return globalLeaderEngine, nil
@@ -109,11 +114,9 @@ func (le *LeaderEngine) init() error {
 	log.Debugf("Init LeaderEngine with HolderIdentity: %q", le.HolderIdentity)
 
 	leaseDuration := config.Datadog.GetInt("leader_lease_duration")
-	if leaseDuration != 0 {
+	if leaseDuration > 0 {
 		le.LeaseDuration = time.Duration(leaseDuration) * time.Second
-	}
-
-	if le.LeaseDuration == 0 {
+	} else {
 		le.LeaseDuration = defaultLeaderLeaseDuration
 	}
 	log.Debugf("LeaderLeaseDuration: %s", le.LeaseDuration.String())
@@ -124,7 +127,7 @@ func (le *LeaderEngine) init() error {
 		return err
 	}
 
-	le.coreClient = apiClient.Client
+	le.coreClient = apiClient.Cl.CoreV1().(*corev1.CoreV1Client)
 
 	// check if we can get ConfigMap.
 	_, err = le.coreClient.ConfigMaps(le.LeaderNamespace).Get(defaultLeaseName, metav1.GetOptions{})
@@ -133,7 +136,7 @@ func (le *LeaderEngine) init() error {
 		return err
 	}
 
-	le.leaderElector, err = le.newElection(le.LeaseName, le.LeaderNamespace, le.LeaseDuration)
+	le.leaderElector, err = le.newElection()
 	if err != nil {
 		log.Errorf("Could not initialize the Leader Election process: %s", err)
 		return err
@@ -147,15 +150,15 @@ func (le *LeaderEngine) init() error {
 func (le *LeaderEngine) EnsureLeaderElectionRuns() error {
 	le.m.Lock()
 	defer le.m.Unlock()
+
 	if le.running {
-		log.Debugf("Currently leader: %t. Leader identity: %q", le.IsLeader(), le.CurrentLeaderName())
+		log.Debugf("Currently Leader: %t. Leader identity: %q", le.IsLeader(), le.GetLeader())
 		return nil
 	}
 
 	le.once.Do(
 		func() {
-			log.Infof("Starting Leader Election process for %q ...", le.HolderIdentity)
-			go le.leaderElector.Run()
+			go le.runLeaderElection()
 		},
 	)
 
@@ -163,53 +166,81 @@ func (le *LeaderEngine) EnsureLeaderElectionRuns() error {
 	timeout := time.After(timeoutDuration)
 	tick := time.NewTicker(time.Millisecond * 500)
 	defer tick.Stop()
-	var leaderIdentity string
 	for {
+		log.Tracef("Waiting for new leader identity...")
 		select {
 		case <-tick.C:
-			leaderIdentity = le.CurrentLeaderName()
+			leaderIdentity := le.GetLeader()
 			if leaderIdentity != "" {
-				log.Infof("Leader Election run, current leader is %q", leaderIdentity)
+				log.Infof("Leader election running, current leader is %q", leaderIdentity)
 				le.running = true
 				return nil
 			}
-			log.Tracef("Leader identity is unset")
-
 		case <-timeout:
-			return fmt.Errorf("leader election still not running, timeout after %s", timeoutDuration.String())
+			return fmt.Errorf("leader election still not running, timeout after %s", timeoutDuration)
 		}
 	}
 }
 
-// CurrentLeaderName is the main interface that can be called to fetch the name of the current leader.
-func (le *LeaderEngine) CurrentLeaderName() string {
-	le.currentHolderMutex.RLock()
-	defer le.currentHolderMutex.RUnlock()
+func (le *LeaderEngine) runLeaderElection() {
+	for {
+		log.Infof("Starting leader election process for %q...", le.HolderIdentity)
 
-	return le.currentHolderIdentity
+		le.leaderElector.Run()
+		log.Info("Leader election lost")
+	}
 }
 
-// IsLeader return bool if the current LeaderEngine is the leader
+// GetLeader returns the identity of the last observed leader or returns the empty string if
+// no leader has yet been observed.
+func (le *LeaderEngine) GetLeader() string {
+	le.leaderIdentityMutex.RLock()
+	defer le.leaderIdentityMutex.RUnlock()
+
+	return le.leaderIdentity
+}
+
+// GetLeaderIP returns the IP the leader can be reached at, assuming its
+// identity is its pod name. Returns empty if we are the leader.
+// The result is not cached.
+func (le *LeaderEngine) GetLeaderIP() (string, error) {
+	leaderName := le.GetLeader()
+	if leaderName == "" || leaderName == le.HolderIdentity {
+		return "", nil
+	}
+
+	endpointList, err := le.coreClient.Endpoints(le.LeaderNamespace).Get(le.ServiceName, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	target, err := apiserver.SearchTargetPerName(endpointList, leaderName)
+	if err != nil {
+		return "", err
+	}
+	return target.IP, nil
+}
+
+// IsLeader returns true if the last observed leader was this client else returns false.
 func (le *LeaderEngine) IsLeader() bool {
-	return le.CurrentLeaderName() == le.HolderIdentity
+	return le.GetLeader() == le.HolderIdentity
 }
 
-// GetLeaderDetails is used in for the Flare and for the Status commands.
-func GetLeaderDetails() (leaderDetails rl.LeaderElectionRecord, err error) {
+// GetLeaderElectionRecord is used in for the Flare and for the Status commands.
+func GetLeaderElectionRecord() (leaderDetails rl.LeaderElectionRecord, err error) {
 	var led rl.LeaderElectionRecord
 	client, err := apiserver.GetAPIClient()
 	if err != nil {
 		return led, err
 	}
 
-	c := client.Client
+	c := client.Cl.CoreV1()
 
-	leaderNamespace := apiserver.GetResourcesNamespace()
+	leaderNamespace := common.GetResourcesNamespace()
 	leaderElectionCM, err := c.ConfigMaps(leaderNamespace).Get(defaultLeaseName, metav1.GetOptions{})
 	if err != nil {
 		return led, err
 	}
-	log.Infof("LeaderElection cm is %q", leaderElectionCM)
+	log.Debugf("LeaderElection cm is %#v", leaderElectionCM)
 	annotation, found := leaderElectionCM.Annotations[rl.LeaderElectionRecordAnnotationKey]
 	if !found {
 		return led, apiserver.ErrNotFound
@@ -227,5 +258,4 @@ func init() {
 	//Convinces goflags that we have called Parse() to avoid noisy logs.
 	//OSS Issue: kubernetes/kubernetes#17162.
 	flag.CommandLine.Parse([]string{})
-
 }

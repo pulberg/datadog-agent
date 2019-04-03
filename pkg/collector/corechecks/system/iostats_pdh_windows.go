@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 // +build windows
 
 package system
@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
-	"syscall"
 	"unsafe"
 
 	"github.com/DataDog/datadog-agent/pkg/util/log"
@@ -18,15 +17,17 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/aggregator"
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
 	core "github.com/DataDog/datadog-agent/pkg/collector/corechecks"
-	"github.com/DataDog/datadog-agent/pkg/util/winutil"
 	"github.com/DataDog/datadog-agent/pkg/util/winutil/pdhutil"
+
+	"golang.org/x/sys/windows"
 )
 
 var (
-	modkernel32 = syscall.NewLazyDLL("kernel32.dll")
-
 	procGetLogicalDriveStringsW = modkernel32.NewProc("GetLogicalDriveStringsW")
 	procGetDriveType            = modkernel32.NewProc("GetDriveTypeW")
+
+	driveLetterPattern    = regexp.MustCompile(`[A-Za-z]:`)
+	unmountedDrivePattern = regexp.MustCompile(`HarddiskVolume([0-9])+`)
 )
 
 const (
@@ -36,46 +37,30 @@ const (
 	DRIVE_FIXED          = 3
 )
 
-var drivelist []string
-
 // IOCheck doesn't need additional fields
 type IOCheck struct {
 	core.CheckBase
 	blacklist    *regexp.Regexp
-	counters     map[string]*pdhutil.PdhCounterSet
+	counters     map[string]*pdhutil.PdhMultiInstanceCounterSet
 	counternames map[string]string
 }
 
-func init() {
-	drivebuf := make([]uint16, 256)
+var pfnGetDriveType = getDriveType
 
-	// Windows API GetLogicalDriveStrings returns all of the assigned drive letters
-	// https://msdn.microsoft.com/en-us/library/windows/desktop/aa364975(v=vs.85).aspx
-	r, _, _ := procGetLogicalDriveStringsW.Call(
-		uintptr(len(drivebuf)),
-		uintptr(unsafe.Pointer(&drivebuf[0])))
-	if r == 0 {
-		return
-	}
-	drivelist = winutil.ConvertWindowsStringList(drivebuf)
+func getDriveType(drive string) uintptr {
+	r, _, _ := procGetDriveType.Call(uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(drive))))
+	return r
 }
-
 func isDrive(instance string) bool {
-	found := false
+	if unmountedDrivePattern.MatchString(instance) {
+		return true
+	}
+	if !driveLetterPattern.MatchString(instance) {
+		return false
+	}
 	instance += "\\"
-	if instance != "C:\\" {
-		return false
-	}
-	for _, driveletter := range drivelist {
-		if instance == driveletter {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return false
-	}
-	r, _, _ := procGetDriveType.Call(uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(instance))))
+
+	r := pfnGetDriveType(instance)
 	if r != DRIVE_FIXED {
 		return false
 	}
@@ -96,10 +81,10 @@ func (c *IOCheck) Configure(data integration.Data, initConfig integration.Data) 
 		"Disk Reads/sec":            "system.io.r_s",
 		"Current Disk Queue Length": "system.io.avg_q_sz"}
 
-	c.counters = make(map[string]*pdhutil.PdhCounterSet)
+	c.counters = make(map[string]*pdhutil.PdhMultiInstanceCounterSet)
 
 	for name := range c.counternames {
-		c.counters[name], err = pdhutil.GetCounterSet("LogicalDisk", name, "", isDrive)
+		c.counters[name], err = pdhutil.GetMultiInstanceCounter("LogicalDisk", name, nil, isDrive)
 		if err != nil {
 			return err
 		}

@@ -1,9 +1,9 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
-// +build !windows
+// +build secrets
 
 package secrets
 
@@ -16,7 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DataDog/datadog-agent/pkg/config"
+	"github.com/DataDog/datadog-agent/pkg/util/common"
+	"github.com/DataDog/datadog-agent/pkg/util/log"
 )
 
 const payloadVersion = "1.0"
@@ -34,40 +35,38 @@ func (b *limitBuffer) Write(p []byte) (n int, err error) {
 }
 
 func execCommand(inputPayload string) ([]byte, error) {
-	command := config.Datadog.GetString("secret_backend_command")
-	args := config.Datadog.GetStringSlice("secret_backend_arguments")
-
-	if command == "" {
-		return nil, fmt.Errorf("no secret_backend_command set: could not decrypt secret")
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(),
-		time.Duration(config.Datadog.GetInt("secret_backend_timeout"))*time.Second)
+		time.Duration(secretBackendTimeout)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.CommandContext(ctx, secretBackendCommand, secretBackendArguments...)
 	if err := checkRights(cmd.Path); err != nil {
 		return nil, err
 	}
 
 	cmd.Stdin = strings.NewReader(inputPayload)
-	// setting an empty env in case some secrets were set using the ENV (ex: API_KEY)
-	cmd.Env = []string{}
 
-	out := limitBuffer{
+	stdout := limitBuffer{
 		buf: &bytes.Buffer{},
-		max: config.Datadog.GetInt("secret_backend_output_max_size"),
+		max: secretBackendOutputMaxSize,
 	}
-	cmd.Stdout = &out
+	stderr := limitBuffer{
+		buf: &bytes.Buffer{},
+		max: secretBackendOutputMaxSize,
+	}
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
 	err := cmd.Run()
 	if err != nil {
+		log.Errorf("secret_backend_command stderr: %s", stderr.buf.String())
+
 		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("error while running '%s': command timeout", command)
+			return nil, fmt.Errorf("error while running '%s': command timeout", secretBackendCommand)
 		}
-		return nil, fmt.Errorf("error while running '%s': %s", command, err)
+		return nil, fmt.Errorf("error while running '%s': %s", secretBackendCommand, err)
 	}
-	return out.buf.Bytes(), nil
+	return stdout.buf.Bytes(), nil
 }
 
 type secret struct {
@@ -78,9 +77,10 @@ type secret struct {
 // for testing purpose
 var runCommand = execCommand
 
-// fetchSecret receives a list of secrets name to fetch, exec a custom executable
-// to fetch the actual secrets and returns them.
-func fetchSecret(secretsHandle []string) (map[string]string, error) {
+// fetchSecret receives a list of secrets name to fetch, exec a custom
+// executable to fetch the actual secrets and returns them. Origin should be
+// the name of the configuration where the secret was referenced.
+func fetchSecret(secretsHandle []string, origin string) (map[string]string, error) {
 	payload := map[string]interface{}{
 		"version": payloadVersion,
 		"secrets": secretsHandle,
@@ -89,6 +89,7 @@ func fetchSecret(secretsHandle []string) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not serialize secrets IDs to fetch password: %s", err)
 	}
+	log.Debugf("calling secret_backend_command with payload: '%s'", jsonPayload)
 	output, err := runCommand(string(jsonPayload))
 	if err != nil {
 		return nil, err
@@ -113,8 +114,11 @@ func fetchSecret(secretsHandle []string) (map[string]string, error) {
 		if v.Value == "" {
 			return nil, fmt.Errorf("decrypted secret for '%s' is empty", sec)
 		}
+
 		// add it to the cache
 		secretCache[sec] = v.Value
+		// keep track of place where a handle was found
+		secretOrigin[sec] = common.NewStringSet(origin)
 		res[sec] = v.Value
 	}
 	return res, nil

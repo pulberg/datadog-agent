@@ -1,28 +1,24 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package host
 
 import (
 	"os"
 	"path"
-	"runtime"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/DataDog/datadog-agent/pkg/util/log"
-	"github.com/shirou/gopsutil/cpu"
-	"github.com/shirou/gopsutil/host"
-
-	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/metadata/common"
-	"github.com/DataDog/datadog-agent/pkg/metadata/host/container"
 	"github.com/DataDog/datadog-agent/pkg/util"
-	"github.com/DataDog/datadog-agent/pkg/util/azure"
+	"github.com/DataDog/datadog-agent/pkg/util/alibaba"
 	"github.com/DataDog/datadog-agent/pkg/util/cache"
+	"github.com/DataDog/datadog-agent/pkg/util/log"
+
+	"github.com/DataDog/datadog-agent/pkg/metadata/host/container"
+	"github.com/DataDog/datadog-agent/pkg/util/azure"
 	"github.com/DataDog/datadog-agent/pkg/util/cloudfoundry"
 	"github.com/DataDog/datadog-agent/pkg/util/ec2"
 	"github.com/DataDog/datadog-agent/pkg/util/gce"
@@ -30,19 +26,6 @@ import (
 )
 
 const packageCachePrefix = "host"
-
-// Collect at init time
-var cpuInfo []cpu.InfoStat
-
-// InitHostMetadata initializes necessary CPU info
-func InitHostMetadata() error {
-	// Collect before even loading any python check to avoid
-	// COM model mayhem on windows
-	var err error
-	cpuInfo, err = cpu.Info()
-
-	return err
-}
 
 // GetPayload builds a metadata payload every time is called.
 // Some data is collected only once, some is cached, some is collected at every call.
@@ -52,7 +35,7 @@ func GetPayload(hostname string) *Payload {
 
 	p := &Payload{
 		Os:            osName,
-		PythonVersion: getPythonVersion(),
+		PythonVersion: GetPythonVersion(),
 		SystemStats:   getSystemStats(),
 		Meta:          meta,
 		HostTags:      getHostTags(),
@@ -76,11 +59,6 @@ func GetPayloadFromCache(hostname string) *Payload {
 	return GetPayload(hostname)
 }
 
-// GetStatusInformation just returns an InfoStat object, we need some additional information that's not
-func GetStatusInformation() *host.InfoStat {
-	return getHostInfo()
-}
-
 // GetMeta grabs the metadata from the cache and returns it,
 // if the cache is empty, then it queries the information directly
 func GetMeta() *Meta {
@@ -91,66 +69,9 @@ func GetMeta() *Meta {
 	return getMeta()
 }
 
-func getHostTags() *tags {
-	hostTags := config.Datadog.GetStringSlice("tags")
-
-	if config.Datadog.GetBool("collect_ec2_tags") {
-		ec2Tags, err := ec2.GetTags()
-		if err != nil {
-			log.Debugf("No EC2 host tags %v", err)
-		} else {
-			hostTags = append(hostTags, ec2Tags...)
-		}
-	}
-
-	k8sTags, err := k8s.GetTags()
-	if err != nil {
-		log.Debugf("No Kubernetes host tags %v", err)
-	} else {
-		hostTags = append(hostTags, k8sTags...)
-	}
-
-	gceTags, err := gce.GetTags()
-	if err != nil {
-		log.Debugf("No GCE host tags %v", err)
-	}
-
-	return &tags{
-		System:              hostTags,
-		GoogleCloudPlatform: gceTags,
-	}
-}
-
-func getSystemStats() *systemStats {
-	var stats *systemStats
-	key := buildKey("systemStats")
-	if x, found := cache.Cache.Get(key); found {
-		stats = x.(*systemStats)
-	} else {
-		cpuInfo := getCPUInfo()
-		hostInfo := getHostInfo()
-
-		stats = &systemStats{
-			Machine:   runtime.GOARCH,
-			Platform:  osName,
-			Processor: cpuInfo.ModelName,
-			CPUCores:  cpuInfo.Cores,
-			Pythonv:   strings.Split(getPythonVersion(), " ")[0],
-		}
-
-		// fill the platform dependent bits of info
-		fillOsVersion(stats, hostInfo)
-		cache.Cache.Set(key, stats, cache.NoExpiration)
-	}
-
-	return stats
-}
-
-// getPythonVersion returns the version string as provided by the embedded Python
-// interpreter. The string is stored in the Agent cache when the interpreter is
-// initialized (see pkg/collector/py/utils.go), an empty value is expected when
-// using this package without embedding Python.
-func getPythonVersion() string {
+// GetPythonVersion returns the version string as provided by the embedded Python
+// interpreter.
+func GetPythonVersion() string {
 	// retrieve the Python version from the Agent cache
 	if x, found := cache.Cache.Get(cache.BuildAgentKey("pythonVersion")); found {
 		return x.(string)
@@ -159,43 +80,17 @@ func getPythonVersion() string {
 	return "n/a"
 }
 
-// getCPUInfo returns InfoStat for the first CPU gopsutil found
-func getCPUInfo() *cpu.InfoStat {
-	key := buildKey("cpuInfo")
-	if x, found := cache.Cache.Get(key); found {
-		return x.(*cpu.InfoStat)
-	}
-
-	if cpuInfo == nil {
-		// don't cache and return zero value
-		log.Errorf("failed to retrieve cpu info at init time")
-		return &cpu.InfoStat{}
-	}
-	info := &cpuInfo[0]
-	cache.Cache.Set(key, info, cache.NoExpiration)
-	return info
-}
-
-func getHostInfo() *host.InfoStat {
-	key := buildKey("hostInfo")
-	if x, found := cache.Cache.Get(key); found {
-		return x.(*host.InfoStat)
-	}
-
-	info, err := host.Info()
-	if err != nil {
-		// don't cache and return zero value
-		log.Errorf("failed to retrieve host info: %s", err)
-		return &host.InfoStat{}
-	}
-	cache.Cache.Set(key, info, cache.NoExpiration)
-	return info
-}
-
 // getHostAliases returns the hostname aliases from different provider
 // This should include GCE, Azure, Cloud foundry, kubernetes
 func getHostAliases() []string {
 	aliases := []string{}
+
+	alibabaAlias, err := alibaba.GetHostAlias()
+	if err != nil {
+		log.Debugf("no Alibaba Host Alias: %s", err)
+	} else if alibabaAlias != "" {
+		aliases = append(aliases, alibabaAlias)
+	}
 
 	azureAlias, err := azure.GetHostAlias()
 	if err != nil {

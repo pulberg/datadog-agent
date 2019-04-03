@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package docker
 
@@ -9,7 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/DataDog/datadog-agent/pkg/metrics"
+	"github.com/DataDog/datadog-agent/pkg/util"
 )
 
 func init() {
@@ -19,12 +22,14 @@ func init() {
 func TestEvents(t *testing.T) {
 	nowTimestamp := time.Now().Unix()
 	expectedTags := []string{
-		instanceTag,
 		"highcardlabeltag:eventhigh",
 		"lowcardlabeltag:eventlow",
 		"highcardenvtag:eventhighenv",
 		"lowcardenvtag:eventlowenv",
 	}
+
+	localHostname, err := util.GetHostname()
+	assert.Nil(t, err)
 
 	expectedBusyboxEvent := metrics.Event{
 		Ts:        nowTimestamp,
@@ -40,6 +45,7 @@ func TestEvents(t *testing.T) {
 		AggregationKey: "docker:datadog/docker-library:busybox_1_28_0",
 		SourceTypeName: "docker",
 		Priority:       metrics.EventPriorityNormal,
+		Host:           localHostname,
 	}
 	sender.AssertEvent(t, expectedBusyboxEvent, time.Minute)
 
@@ -56,6 +62,7 @@ func TestEvents(t *testing.T) {
 		AggregationKey: "docker:datadog/docker-library:redis_3_2_11-alpine",
 		SourceTypeName: "docker",
 		Priority:       metrics.EventPriorityNormal,
+		Host:           localHostname,
 	}
 	sender.AssertEvent(t, expectedRedisEvent, time.Minute)
 

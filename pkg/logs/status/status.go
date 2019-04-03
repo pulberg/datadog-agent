@@ -1,31 +1,31 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package status
 
 import (
+	"expvar"
+	"strings"
+
 	"github.com/DataDog/datadog-agent/pkg/logs/config"
+	"github.com/DataDog/datadog-agent/pkg/logs/metrics"
 )
 
 var (
-	builder *Builder
+	builder  *Builder
+	warnings *config.Messages
+	errors   *config.Messages
 )
 
 // Source provides some information about a logs source.
 type Source struct {
-	Type   string   `json:"type"`
-	Status string   `json:"status"`
-	Inputs []string `json:"inputs"`
-	// TCP, UDP
-	Port int `json:"port"`
-	// File
-	Path string `json:"path"`
-	// Docker
-	Image string `json:"image"`
-	Label string `json:"label"`
-	Name  string `json:"name"`
+	Type          string                 `json:"type"`
+	Configuration map[string]interface{} `json:"configuration"`
+	Status        string                 `json:"status"`
+	Inputs        []string               `json:"inputs"`
+	Messages      []string               `json:"messages"`
 }
 
 // Integration provides some information about a logs integration.
@@ -38,58 +38,64 @@ type Integration struct {
 type Status struct {
 	IsRunning    bool          `json:"is_running"`
 	Integrations []Integration `json:"integrations"`
+	Errors       []string      `json:"errors"`
+	Warnings     []string      `json:"warnings"`
 }
 
-// Builder is used to build the status.
-type Builder struct {
-	sources []*config.LogSource
+// Init instantiates the builder that builds the status on the fly.
+func Init(isRunning *int32, sources *config.LogSources) {
+	warnings = config.NewMessages()
+	errors = config.NewMessages()
+	builder = NewBuilder(isRunning, sources, warnings, errors)
 }
 
-// Initialize instantiates a builder that holds the sources required to build the current status later on.
-func Initialize(sources []*config.LogSource) {
-	builder = &Builder{
-		sources: sources,
-	}
+// Clear clears the status which means it needs to be initialized again to be used.
+func Clear() {
+	builder = nil
+	warnings = nil
+	errors = nil
 }
 
 // Get returns the status of the logs-agent computed on the fly.
 func Get() Status {
-	// Sort sources by name (ie. by integration name ~= file name)
-	sources := make(map[string][]*config.LogSource)
-	for _, source := range builder.sources {
-		if _, exists := sources[source.Name]; !exists {
-			sources[source.Name] = []*config.LogSource{}
+	if builder == nil {
+		return Status{
+			IsRunning: false,
 		}
-		sources[source.Name] = append(sources[source.Name], source)
 	}
-	// Convert to json
-	var integrations []Integration
-	for name, sourceList := range sources {
-		var sources []Source
-		for _, source := range sourceList {
-			var status string
-			if source.Status.IsPending() {
-				status = "Pending"
-			} else if source.Status.IsSuccess() {
-				status = "OK"
-			} else if source.Status.IsError() {
-				status = source.Status.GetError()
-			}
-			sources = append(sources, Source{
-				Type:   source.Config.Type,
-				Status: status,
-				Inputs: source.GetInputs(),
-				Port:   source.Config.Port,
-				Path:   source.Config.Path,
-				Image:  source.Config.Image,
-				Label:  source.Config.Label,
-				Name:   source.Config.Name,
-			})
-		}
-		integrations = append(integrations, Integration{Name: name, Sources: sources})
+	return builder.BuildStatus()
+}
+
+// AddGlobalWarning keeps track of a warning message to display on the status.
+func AddGlobalWarning(key string, warning string) {
+	if warnings != nil {
+		warnings.AddMessage(key, warning)
 	}
-	return Status{
-		IsRunning:    true,
-		Integrations: integrations,
+}
+
+// RemoveGlobalWarning loses track of a warning message
+// that does not need to be displayed on the status anymore.
+func RemoveGlobalWarning(key string) {
+	if warnings != nil {
+		warnings.RemoveMessage(key)
 	}
+}
+
+// AddGlobalError an error message for the status display (errors will stop the agent)
+func AddGlobalError(key string, errorMessage string) {
+	if errors != nil {
+		errors.AddMessage(key, errorMessage)
+	}
+}
+
+func init() {
+	metrics.LogsExpvars.Set("Errors", expvar.Func(func() interface{} {
+		return strings.Join(Get().Errors, ", ")
+	}))
+	metrics.LogsExpvars.Set("Warnings", expvar.Func(func() interface{} {
+		return strings.Join(Get().Warnings, ", ")
+	}))
+	metrics.LogsExpvars.Set("IsRunning", expvar.Func(func() interface{} {
+		return Get().IsRunning
+	}))
 }

@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 // +build !windows
 // UDS won't work in windows
@@ -24,14 +24,23 @@ import (
 
 var packetPoolUDS = NewPacketPool(config.Datadog.GetInt("dogstatsd_buffer_size"))
 
-func TestNewUDSListener(t *testing.T) {
-	dir, err := ioutil.TempDir("", "dd-test-")
+func testFileExistsNewUDSListener(t *testing.T, socketPath string) {
+	_, err := os.Create(socketPath)
 	assert.Nil(t, err)
-	defer os.RemoveAll(dir) // clean up
-	socketPath := filepath.Join(dir, "dsd.socket")
+	defer os.Remove(socketPath)
+	_, err = NewUDSListener(nil, packetPoolUDS)
+	assert.Error(t, err)
+}
 
-	config.Datadog.Set("dogstatsd_socket", socketPath)
+func testSocketExistsNewUSDListener(t *testing.T, socketPath string) {
+	address, err := net.ResolveUnixAddr("unix", socketPath)
+	assert.Nil(t, err)
+	_, err = net.ListenUnix("unix", address)
+	assert.Nil(t, err)
+	testWorkingNewUDSListener(t, socketPath)
+}
 
+func testWorkingNewUDSListener(t *testing.T, socketPath string) {
 	s, err := NewUDSListener(nil, packetPoolUDS)
 	defer s.Stop()
 
@@ -42,14 +51,34 @@ func TestNewUDSListener(t *testing.T) {
 	assert.Equal(t, "Srwx-w--w-", fi.Mode().String())
 }
 
+func TestNewUDSListener(t *testing.T) {
+	dir, err := ioutil.TempDir("", "dd-test-")
+	assert.Nil(t, err)
+	defer os.RemoveAll(dir) // clean up
+	socketPath := filepath.Join(dir, "dsd.socket")
+	mockConfig := config.Mock()
+	mockConfig.Set("dogstatsd_socket", socketPath)
+
+	t.Run("fail_file_exists", func(tt *testing.T) {
+		testFileExistsNewUDSListener(tt, socketPath)
+	})
+	t.Run("socket_exists", func(tt *testing.T) {
+		testSocketExistsNewUSDListener(tt, socketPath)
+	})
+	t.Run("working", func(tt *testing.T) {
+		testWorkingNewUDSListener(tt, socketPath)
+	})
+}
+
 func TestStartStopUDSListener(t *testing.T) {
 	dir, err := ioutil.TempDir("", "dd-test-")
 	assert.Nil(t, err)
 	defer os.RemoveAll(dir) // clean up
 	socketPath := filepath.Join(dir, "dsd.socket")
 
-	config.Datadog.Set("dogstatsd_socket", socketPath)
-	config.Datadog.Set("dogstatsd_origin_detection", false)
+	mockConfig := config.Mock()
+	mockConfig.Set("dogstatsd_socket", socketPath)
+	mockConfig.Set("dogstatsd_origin_detection", false)
 	s, err := NewUDSListener(nil, packetPoolUDS)
 	assert.Nil(t, err)
 	assert.NotNil(t, s)
@@ -70,13 +99,14 @@ func TestUDSReceive(t *testing.T) {
 	defer os.RemoveAll(dir) // clean up
 	socketPath := filepath.Join(dir, "dsd.socket")
 
-	config.Datadog.Set("dogstatsd_socket", socketPath)
-	config.Datadog.Set("dogstatsd_origin_detection", false)
+	mockConfig := config.Mock()
+	mockConfig.Set("dogstatsd_socket", socketPath)
+	mockConfig.Set("dogstatsd_origin_detection", false)
 
 	var contents = []byte("daemon:666|g|#sometag1:somevalue1,sometag2:somevalue2")
 
-	packetChannel := make(chan *Packet)
-	s, err := NewUDSListener(packetChannel, packetPoolUDS)
+	packetsChannel := make(chan Packets)
+	s, err := NewUDSListener(packetsChannel, packetPoolUDS)
 	assert.Nil(t, err)
 	assert.NotNil(t, s)
 
@@ -88,8 +118,10 @@ func TestUDSReceive(t *testing.T) {
 	conn.Write(contents)
 
 	select {
-	case packet := <-packetChannel:
+	case packets := <-packetsChannel:
+		packet := packets[0]
 		assert.NotNil(t, packet)
+		assert.Equal(t, 1, len(packets))
 		assert.Equal(t, packet.Contents, contents)
 		assert.Equal(t, packet.Origin, "")
 	case <-time.After(2 * time.Second):

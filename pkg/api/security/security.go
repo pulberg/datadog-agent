@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package security
 
@@ -28,7 +28,7 @@ import (
 const (
 	authTokenName                 = "auth_token"
 	authTokenMinimalLen           = 32
-	clusterAgentAuthTokenFilename = "cluster_agent_auth_token"
+	clusterAgentAuthTokenFilename = "cluster_agent.auth_token"
 )
 
 // GenerateKeyPair create a public/private keypair
@@ -106,15 +106,18 @@ func GenerateRootCert(hosts []string, bits int) (
 	return
 }
 
+// GetAuthTokenFilepath returns the path to the auth_token file.
+func GetAuthTokenFilepath() string {
+	if config.Datadog.GetString("auth_token_file_path") != "" {
+		return config.Datadog.GetString("auth_token_file_path")
+	}
+	return filepath.Join(filepath.Dir(config.Datadog.ConfigFileUsed()), authTokenName)
+}
+
 // FetchAuthToken gets the authentication token from the auth token file & creates one if it doesn't exist
 // Requires that the config has been set up before calling
 func FetchAuthToken() (string, error) {
-	var authTokenFile string
-	if config.Datadog.GetString("auth_token_file_path") != "" {
-		authTokenFile = config.Datadog.GetString("auth_token_file_path")
-	} else {
-		authTokenFile = filepath.Join(filepath.Dir(config.Datadog.ConfigFileUsed()), authTokenName)
-	}
+	authTokenFile := GetAuthTokenFilepath()
 
 	// Create a new token if it doesn't exist
 	if _, e := os.Stat(authTokenFile); os.IsNotExist(e) {
@@ -157,17 +160,17 @@ func DeleteAuthToken() error {
 // 1st. the configuration value of "cluster_agent.auth_token" in datadog.yaml
 // 2nd. from the filesystem
 // If using the token from the filesystem, the token file must be next to the datadog.yaml
-// with the filename: cluster_agent_auth_token
+// with the filename: cluster_agent.auth_token
 func GetClusterAgentAuthToken() (string, error) {
 	authToken := config.Datadog.GetString("cluster_agent.auth_token")
 	if authToken != "" {
-		log.Debugf("Using cluster_agent.auth_token from datadog.yaml")
+		log.Infof("Using configured cluster_agent.auth_token")
 		return authToken, validateAuthToken(authToken)
 	}
 
 	// load the cluster agent auth token from filesystem
 	tokenAbsPath := filepath.Join(config.FileUsedDir(), clusterAgentAuthTokenFilename)
-	log.Debugf("Empty cluster_agent_auth_token, loading from %s", tokenAbsPath)
+	log.Debugf("Empty cluster_agent.auth_token, loading from %s", tokenAbsPath)
 
 	// Create a new token if it doesn't exist
 	if _, e := os.Stat(tokenAbsPath); os.IsNotExist(e) {
@@ -182,18 +185,18 @@ func GetClusterAgentAuthToken() (string, error) {
 		if e != nil {
 			return "", fmt.Errorf("error creating authentication token: %s", e)
 		}
-		log.Infof("Saved a new authentication token to %s", tokenAbsPath)
+		log.Infof("Saved a new authentication token for the Cluster Agent at %s", tokenAbsPath)
 	}
 
 	_, err := os.Stat(tokenAbsPath)
 	if err != nil {
-		return "", fmt.Errorf("empty cluster_agent_auth_token and cannot find %q: %s", tokenAbsPath, err)
+		return "", fmt.Errorf("empty cluster_agent.auth_token and cannot find %q: %s", tokenAbsPath, err)
 	}
 	b, err := ioutil.ReadFile(tokenAbsPath)
 	if err != nil {
-		return "", fmt.Errorf("empty cluster_agent_auth_token and cannot read %s: %s", tokenAbsPath, err)
+		return "", fmt.Errorf("empty cluster_agent.auth_token and cannot read %s: %s", tokenAbsPath, err)
 	}
-	log.Debugf("cluster_agent_auth_token loaded from %s", tokenAbsPath)
+	log.Debugf("cluster_agent.auth_token loaded from %s", tokenAbsPath)
 
 	authToken = string(b)
 	return authToken, validateAuthToken(authToken)

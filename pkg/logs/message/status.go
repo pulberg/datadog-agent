@@ -1,18 +1,17 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package message
 
-// Status values,
-// for more information check https://en.wikipedia.org/wiki/Syslog#Severity_level.
+// Status values
 const (
-	StatusEmergency = "emerg"
+	StatusEmergency = "emergency"
 	StatusAlert     = "alert"
 	StatusCritical  = "critical"
 	StatusError     = "error"
-	StatusWarning   = "warning"
+	StatusWarning   = "warn"
 	StatusNotice    = "notice"
 	StatusInfo      = "info"
 	StatusDebug     = "debug"

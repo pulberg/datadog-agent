@@ -1,7 +1,9 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
+
+// +build kubeapiserver
 
 package app
 
@@ -31,6 +33,8 @@ One can easily identify which pods are running on which nodes,
 as well as which services are serving the pods. Or the deployment name for the pod`,
 	Example: "datadog-cluster-agent metamap ip-10-0-115-123",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// we'll search for a config file named `datadog-cluster.yaml`
+		config.Datadog.SetConfigName("datadog-cluster")
 		err := common.SetupConfig(confPath)
 		if err != nil {
 			return fmt.Errorf("unable to set up global cluster agent configuration: %v", err)
@@ -49,9 +53,9 @@ func getMetadataMap(nodeName string) error {
 	c := util.GetClient(false) // FIX: get certificates right then make this true
 	var urlstr string
 	if nodeName == "" {
-		urlstr = fmt.Sprintf("https://localhost:%v/api/v1/metadata", config.Datadog.GetInt("cluster_agent_cmd_port"))
+		urlstr = fmt.Sprintf("https://localhost:%v/api/v1/tags/pod", config.Datadog.GetInt("cluster_agent.cmd_port"))
 	} else {
-		urlstr = fmt.Sprintf("https://localhost:%v/api/v1/metadata/%s", config.Datadog.GetInt("cluster_agent_cmd_port"), nodeName)
+		urlstr = fmt.Sprintf("https://localhost:%v/api/v1/tags/pod/%s", config.Datadog.GetInt("cluster_agent.cmd_port"), nodeName)
 	}
 
 	// Set session token

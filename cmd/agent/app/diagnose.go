@@ -1,13 +1,12 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2018 Datadog, Inc.
+// Copyright 2016-2019 Datadog, Inc.
 
 package app
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/DataDog/datadog-agent/cmd/agent/common"
 	"github.com/DataDog/datadog-agent/pkg/config"
@@ -43,22 +42,21 @@ func doDiagnose(cmd *cobra.Command, args []string) {
 	}
 
 	err := config.SetupLogger(
+		loggerName,
 		config.Datadog.GetString("log_level"),
 		common.DefaultLogFile,
 		config.GetSyslogURI(),
 		config.Datadog.GetBool("syslog_rfc"),
-		config.Datadog.GetBool("syslog_tls"),
-		config.Datadog.GetString("syslog_pem"),
 		config.Datadog.GetBool("log_to_console"),
 		config.Datadog.GetBool("log_format_json"),
 	)
 	if err != nil {
 		log.Errorf("Error while setting up logging, exiting: %v", err)
+		panic(err)
 	}
 
-	errors, err := diagnose.RunAll(color.Output)
+	err = diagnose.RunAll(color.Output)
 	if err != nil {
 		panic(err)
 	}
-	os.Exit(errors)
 }
